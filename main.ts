@@ -29,9 +29,8 @@ let threatLog: ThreatEntry[] = [];
 
 function createControlPanelWindow(): void {
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
-  const preloadPath = isDev 
-    ? path.join(__dirname, 'dist-electron/preload.js')
-    : path.join(__dirname, 'preload.js');
+  // __dirname is already dist-electron when compiled, so just use preload.js
+  const preloadPath = path.join(__dirname, 'preload.js');
   
   controlPanelWindow = new BrowserWindow({
     width: 800,
@@ -62,10 +61,8 @@ function createControlPanelWindow(): void {
 function createOverlayWindow(): void {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
-  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
-  const preloadPath = isDev 
-    ? path.join(__dirname, 'dist-electron/preload.js')
-    : path.join(__dirname, 'preload.js');
+  // __dirname is already dist-electron when compiled, so just use preload.js
+  const preloadPath = path.join(__dirname, 'preload.js');
 
   overlayWindow = new BrowserWindow({
     width: width,
@@ -88,7 +85,8 @@ function createOverlayWindow(): void {
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
 
   // Load the overlay React app
-  if (isDev) {
+  const isDevOverlay = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  if (isDevOverlay) {
     overlayWindow.loadURL('http://localhost:5173?overlay=true');
   } else {
     overlayWindow.loadFile('dist/index.html', { query: { overlay: 'true' } });
