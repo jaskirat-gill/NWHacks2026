@@ -1,10 +1,20 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const API_KEY = process.env.GEMINI_API_KEY;
 let genAI: GoogleGenerativeAI | null = null;
 
-if (API_KEY) {
-  genAI = new GoogleGenerativeAI(API_KEY);
+function getAPIKey(): string | undefined {
+  return process.env.GEMINI_API_KEY;
+}
+
+function getGenAI(): GoogleGenerativeAI {
+  if (!genAI) {
+    const API_KEY = getAPIKey();
+    if (!API_KEY) {
+      throw new Error('Gemini API key not configured');
+    }
+    genAI = new GoogleGenerativeAI(API_KEY);
+  }
+  return genAI;
 }
 
 export interface VisionAnalysisResult {
@@ -21,12 +31,15 @@ export interface VisionAnalysisResult {
  * @returns Analysis result with AI detection, text, and URLs
  */
 export async function analyzeScreenshot(base64Image: string): Promise<VisionAnalysisResult> {
-  if (!genAI || !API_KEY) {
+  const API_KEY = getAPIKey();
+  console.log('API Key:', API_KEY ? 'Found' : 'Not found');
+
+  if (!API_KEY) {
     throw new Error('Gemini API key not configured');
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = getGenAI().getGenerativeModel({ model: 'gemini-3-flash' });
 
     const prompt = `Analyze this screenshot and determine:
 1. Does this image contain AI-generated content, deepfakes, or synthetic media? (yes/no with confidence 0-1)

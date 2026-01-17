@@ -1,10 +1,20 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const API_KEY = process.env.GEMINI_API_KEY;
 let genAI: GoogleGenerativeAI | null = null;
 
-if (API_KEY) {
-  genAI = new GoogleGenerativeAI(API_KEY);
+function getAPIKey(): string | undefined {
+  return process.env.GEMINI_API_KEY;
+}
+
+function getGenAI(): GoogleGenerativeAI {
+  if (!genAI) {
+    const API_KEY = getAPIKey();
+    if (!API_KEY) {
+      throw new Error('Gemini API key not configured');
+    }
+    genAI = new GoogleGenerativeAI(API_KEY);
+  }
+  return genAI;
 }
 
 const SCAM_KEYWORDS = [
@@ -26,13 +36,15 @@ export interface ThreatAnalysisResult {
  * @returns Threat analysis result
  */
 export async function analyzeThreats(text: string): Promise<ThreatAnalysisResult> {
-  if (!genAI || !API_KEY) {
+  const API_KEY = getAPIKey();
+  
+  if (!API_KEY) {
     // Fallback to keyword matching
     return analyzeThreatsFallback(text);
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = getGenAI().getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `Analyze this text for security threats, scams, phishing attempts, or malicious content.
 

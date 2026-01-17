@@ -1,7 +1,10 @@
 import axios from 'axios';
 
-const API_KEY = process.env.GOOGLE_SAFE_BROWSING_API_KEY;
 const API_URL = 'https://safebrowsing.googleapis.com/v4/threatMatches:find';
+
+function getAPIKey(): string | undefined {
+  return process.env.GOOGLE_SAFE_BROWSING_API_KEY;
+}
 
 export interface URLSafetyResult {
   isSafe: boolean;
@@ -14,6 +17,8 @@ export interface URLSafetyResult {
  * @returns Safety result with threat types if unsafe
  */
 export async function checkURLSafety(url: string): Promise<URLSafetyResult> {
+  const API_KEY = getAPIKey();
+  
   if (!API_KEY) {
     console.warn('Safe Browsing API key not configured, assuming URL is safe');
     return { isSafe: true, threatTypes: [] };

@@ -1,13 +1,38 @@
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'path';
+import dotenv from 'dotenv';
+import { existsSync } from 'fs';
+
+// Load environment variables as early as possible
+// Check multiple possible .env file locations
+const possiblePaths = [
+  path.join(__dirname, '..', '.env'),  // Development: dist-electron/../.env
+  path.join(process.cwd(), '.env'),     // Current working directory
+];
+
+if (app.isPackaged && process.resourcesPath) {
+  possiblePaths.unshift(path.join(process.resourcesPath, '.env'));
+}
+
+// Try to find and load .env file
+for (const envPath of possiblePaths) {
+  if (existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+    console.log(`Loaded .env from: ${envPath}`);
+    break;
+  }
+}
+
+// Fallback to default .env location
+if (!process.env.GEMINI_API_KEY) {
+  dotenv.config(); // Try default location
+}
+
 import { analyzeScreenshot } from './src/services/geminiVision';
 import { analyzeThreats } from './src/services/geminiText';
 import { checkURLSafety } from './src/services/safeBrowsing';
 import { calculateRisk } from './src/services/riskCalculator';
 import { captureScreen } from './src/utils/screenCapture';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 interface ThreatEntry {
   id: number;
