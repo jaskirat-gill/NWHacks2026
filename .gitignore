@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-electron/
+build/
+.env
+.DS_Store
+*.log
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
