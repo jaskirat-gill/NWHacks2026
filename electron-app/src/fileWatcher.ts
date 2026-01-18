@@ -29,22 +29,35 @@ const BATCH_SIZE = 10;
 let watcher: fs.FSWatcher | null = null;
 
 /**
- * Extract base post ID from filename
- * Filename format: {postId}_frame{N}_{timestamp}.jpg
- * We want just the postId part so it matches what detectAI() queries with
+ * Extract base post ID from filename (just "post_X" part)
+ * Filename format: post_{X}_{timestamp}_frame{N}_{timestamp}.jpg
+ * We want just "post_X" to use as the analysis key
+ * Multiple batches for the same post will overwrite each other
  */
 function extractPostId(fileName: string): string {
   // Remove extension first
   const withoutExt = fileName.replace(/\.(jpg|jpeg)$/i, '');
   
-  // Extract everything before "_frame" to get the base post ID
-  // e.g., "post_2_1768716078333_frame0_1768715657294" -> "post_2_1768716078333"
-  const frameIndex = withoutExt.indexOf('_frame');
-  if (frameIndex !== -1) {
-    return withoutExt.substring(0, frameIndex);
+  // Extract just "post_X" - match the pattern "post_" followed by digits
+  // e.g., "post_1_1768711195270_frame0_1768711199555" -> "post_1"
+  const postIdMatch = withoutExt.match(/^(post_\d+)/);
+  if (postIdMatch) {
+    return postIdMatch[1];
   }
   
-  // Fallback: return without extension if no _frame pattern found
+  // Fallback: try to extract anything before first underscore after "post_"
+  const postIndex = withoutExt.indexOf('post_');
+  if (postIndex !== -1) {
+    const afterPost = withoutExt.substring(postIndex);
+    const secondUnderscore = afterPost.indexOf('_', 5); // Skip "post_" (5 chars)
+    if (secondUnderscore !== -1) {
+      return afterPost.substring(0, secondUnderscore);
+    }
+    // If no second underscore, return everything after "post_"
+    return afterPost;
+  }
+  
+  // Final fallback: return without extension
   return withoutExt;
 }
 
