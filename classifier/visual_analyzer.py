@@ -42,7 +42,8 @@ class VisualAnalyzer:
         results = {
             "faces": self._analyze_faces(img_array, image.size),
             "text": self._analyze_text(image),
-            "metadata": self._analyze_metadata(image, img_array)
+            "metadata": self._analyze_metadata(image, img_array),
+            "semantic_errors": self._analyze_semantic_errors(img_array, image.size)
         }
         
         return results
@@ -128,63 +129,132 @@ class VisualAnalyzer:
             "face_locations": face_locations
         }
     
+    def _preprocess_for_ocr(self, image: Image.Image) -> Image.Image:
+        """
+        Preprocess image for better OCR results on TikTok screenshots.
+        
+        Applies: upscaling, grayscale conversion, denoising, contrast enhancement, sharpening.
+        """
+        # Convert to numpy array
+        img_array = np.array(image.convert("RGB"))
+        original_height = img_array.shape[0]
+        
+        # Upscale if small (helps with small text in video frames)
+        if original_height < 300:
+            scale_factor = 2.0
+            img_array = cv2.resize(
+                img_array, None, 
+                fx=scale_factor, fy=scale_factor, 
+                interpolation=cv2.INTER_CUBIC
+            )
+        
+        # Convert to grayscale (often better for OCR than color)
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        
+        # Denoise (bilateral filter preserves edges while removing noise)
+        denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+        
+        # CLAHE contrast enhancement (helps with compressed video frames)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(denoised)
+        
+        # Sharpening (unsharp mask) - helps with video compression blur
+        gaussian = cv2.GaussianBlur(enhanced, (0, 0), 2.0)
+        sharpened = cv2.addWeighted(enhanced, 1.5, gaussian, -0.5, 0)
+        
+        # Convert back to PIL Image
+        return Image.fromarray(sharpened)
+    
     def _analyze_text(self, image: Image.Image) -> Dict[str, Any]:
         """
-        Extract text from image using OCR and detect gibberish patterns.
+        Extract text from image using OCR with preprocessing and multiple PSM modes.
+        
+        Optimized for TikTok video frame screenshots with degraded text quality.
         
         Returns:
             {
                 "text_found": str,
                 "is_gibberish": bool,
                 "text_locations": List[Dict],
-                "word_count": int
+                "word_count": int,
+                "ocr_confidence": float  # Average confidence from successful detections
             }
         """
-        try:
-            # Extract text with OCR
-            ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
-            
-            # Extract all text
-            text_parts = []
-            text_locations = []
-            
-            n_boxes = len(ocr_data['text'])
-            for i in range(n_boxes):
-                text = ocr_data['text'][i].strip()
-                conf = int(ocr_data['conf'][i])
+        # Preprocess image for better OCR
+        preprocessed = self._preprocess_for_ocr(image)
+        
+        # Try multiple PSM (Page Segmentation Mode) modes and combine results
+        # PSM modes for different text layouts in video frames
+        psm_modes = [11, 6, 7, 8, 13]  # Sparse text, uniform block, single line, word, raw line
+        all_text_parts = []
+        all_locations = []
+        all_confidences = []
+        
+        for psm in psm_modes:
+            try:
+                config = f'--psm {psm}'
+                ocr_data = pytesseract.image_to_data(
+                    preprocessed, 
+                    config=config, 
+                    output_type=pytesseract.Output.DICT
+                )
                 
-                if text and conf > 0:  # Only include detected text with confidence > 0
-                    text_parts.append(text)
+                # Extract text from this PSM mode
+                n_boxes = len(ocr_data['text'])
+                for i in range(n_boxes):
+                    text = ocr_data['text'][i].strip()
+                    conf = int(ocr_data['conf'][i])
                     
-                    # Store location info
-                    if ocr_data['left'][i] != -1:  # Valid location
-                        text_locations.append({
-                            "text": text,
-                            "x": ocr_data['left'][i],
-                            "y": ocr_data['top'][i],
-                            "width": ocr_data['width'][i],
-                            "height": ocr_data['height'][i],
-                            "confidence": conf
-                        })
-            
-            text_found = " ".join(text_parts)
-            word_count = len(text_parts)
-            
-            # Detect gibberish patterns
-            is_gibberish = self._detect_gibberish(text_found)
-            
-        except Exception:
-            # If OCR fails, return empty results
-            text_found = ""
-            is_gibberish = False
-            text_locations = []
-            word_count = 0
+                    # Lower threshold for screenshots (video frames have degraded text)
+                    # Accept confidence > -1 (all detections, even low confidence)
+                    if text and conf > -1:
+                        # Store unique text entries (deduplicate by position)
+                        text_location_key = (
+                            ocr_data['left'][i] if ocr_data['left'][i] != -1 else -1,
+                            ocr_data['top'][i] if ocr_data['top'][i] != -1 else -1
+                        )
+                        
+                        # Check if we already have text at this location
+                        existing = next(
+                            (loc for loc in all_locations 
+                             if loc.get('x') == text_location_key[0] and 
+                                loc.get('y') == text_location_key[1]),
+                            None
+                        )
+                        
+                        if not existing and text_location_key[0] != -1:
+                            all_text_parts.append(text)
+                            all_confidences.append(conf)
+                            
+                            all_locations.append({
+                                "text": text,
+                                "x": ocr_data['left'][i],
+                                "y": ocr_data['top'][i],
+                                "width": ocr_data['width'][i],
+                                "height": ocr_data['height'][i],
+                                "confidence": conf
+                            })
+            except Exception:
+                # Continue with next PSM mode if one fails
+                continue
+        
+        # Calculate average OCR confidence (only from positive confidence detections)
+        positive_confs = [c for c in all_confidences if c > 0]
+        ocr_confidence = float(np.mean(positive_confs)) / 100.0 if positive_confs else 0.0
+        
+        # Combine all detected text
+        text_found = " ".join(all_text_parts)
+        word_count = len(all_text_parts)
+        
+        # Detect gibberish patterns
+        is_gibberish = self._detect_gibberish(text_found)
         
         return {
             "text_found": text_found,
             "is_gibberish": bool(is_gibberish),
-            "text_locations": text_locations,
-            "word_count": int(word_count)
+            "text_locations": all_locations,
+            "word_count": int(word_count),
+            "ocr_confidence": round(ocr_confidence, 4)
         }
     
     def _detect_gibberish(self, text: str) -> bool:
@@ -274,4 +344,119 @@ class VisualAnalyzer:
             "quality_score": round(quality_score, 4),
             "color_channels": int(color_channels),
             "has_compression_artifacts": bool(has_compression_artifacts)
+        }
+    
+    def _analyze_semantic_errors(
+        self,
+        img_array: np.ndarray,
+        image_size: Tuple[int, int]
+    ) -> Dict[str, Any]:
+        """
+        Analyze semantic errors in the image (geometry-based, screenshot-resilient).
+        
+        Focuses on anatomical inconsistencies, perspective violations, lighting issues,
+        and spatial relationships rather than texture patterns.
+        
+        Returns:
+            {
+                "anatomical_inconsistencies": float (0-1),
+                "perspective_violations": float (0-1),
+                "lighting_inconsistencies": float (0-1),
+                "spatial_errors": float (0-1),
+                "text_warping": float (0-1),
+                "overall_semantic_score": float (0-1)  # Higher = more errors
+            }
+        """
+        width, height = image_size
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        
+        # Initialize scores
+        anatomical_score = 0.0
+        perspective_score = 0.0
+        lighting_score = 0.0
+        spatial_score = 0.0
+        text_warping_score = 0.0
+        
+        # 1. Anatomical inconsistencies (face geometry)
+        faces = self.face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+        )
+        
+        if len(faces) > 0:
+            # Simple heuristic: check face proportions
+            # Real faces typically have width/height ratio around 0.6-0.8
+            for (x, y, w, h) in faces:
+                face_ratio = w / h if h > 0 else 1.0
+                # If ratio is extreme, might indicate distortion
+                if face_ratio < 0.4 or face_ratio > 1.2:
+                    anatomical_score += 0.3
+        
+        anatomical_score = min(anatomical_score, 1.0)
+        
+        # 2. Perspective violations (vanishing point analysis)
+        # Simple check: use edge detection to find strong lines
+        edges = cv2.Canny(gray, 50, 150)
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=50, maxLineGap=10)
+        
+        if lines is not None and len(lines) > 5:
+            # Check if lines converge to reasonable vanishing points
+            # Too many parallel lines in wrong directions might indicate issues
+            angles = []
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
+                angles.append(angle)
+            
+            # If angles are too uniform or too chaotic, might indicate errors
+            if len(angles) > 0:
+                angle_variance = np.var(angles)
+                if angle_variance < 100:  # Too uniform (unlikely in real scenes)
+                    perspective_score = 0.3
+                elif angle_variance > 5000:  # Too chaotic (might indicate artifacts)
+                    perspective_score = 0.2
+        
+        # 3. Lighting/shadow inconsistencies
+        # Simple check: look for inconsistent shadow directions
+        # (This is a simplified heuristic - full implementation would be more complex)
+        # For now, use variance in brightness across image regions
+        regions = [
+            gray[0:height//3, 0:width//3],      # Top-left
+            gray[0:height//3, 2*width//3:],     # Top-right
+            gray[2*height//3:, 0:width//3],     # Bottom-left
+            gray[2*height//3:, 2*width//3:]     # Bottom-right
+        ]
+        
+        region_brightness = [np.mean(region) for region in regions if region.size > 0]
+        if len(region_brightness) >= 4:
+            brightness_variance = np.var(region_brightness)
+            # Very high or very low variance might indicate lighting issues
+            if brightness_variance > 3000 or brightness_variance < 100:
+                lighting_score = 0.2
+        
+        # 4. Spatial errors (depth relationships)
+        # Simplified: check if foreground/background relationships seem plausible
+        # This is a placeholder - full implementation would use depth estimation
+        spatial_score = 0.0  # Conservative - no detection yet
+        
+        # 5. Text warping (geometry inconsistencies in text regions)
+        # Check if detected text regions have unusual aspect ratios
+        # (Would need OCR results, but this is called before text analysis completes)
+        text_warping_score = 0.0  # Will be informed by OCR results if available
+        
+        # Calculate overall semantic error score (higher = more errors detected)
+        overall_score = (
+            anatomical_score * 0.3 +
+            perspective_score * 0.2 +
+            lighting_score * 0.2 +
+            spatial_score * 0.15 +
+            text_warping_score * 0.15
+        )
+        
+        return {
+            "anatomical_inconsistencies": round(anatomical_score, 4),
+            "perspective_violations": round(perspective_score, 4),
+            "lighting_inconsistencies": round(lighting_score, 4),
+            "spatial_errors": round(spatial_score, 4),
+            "text_warping": round(text_warping_score, 4),
+            "overall_semantic_score": round(overall_score, 4)
         }

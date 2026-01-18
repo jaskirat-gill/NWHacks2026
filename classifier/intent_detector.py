@@ -34,27 +34,33 @@ class IntentDetector:
             'product_promotion': 0.1       # Product promotion is less risky
         }
     
-    def detect_intent(self, features: Dict[str, Any]) -> Dict[str, Any]:
+    def detect_intent(self, features: Dict[str, Any], signal_confidence: float = 0.7) -> Dict[str, Any]:
         """
-        Analyze visual features to detect intent and calculate risk scores.
+        Analyze visual features to generate hypothesis-based intent detection.
+        
+        Returns plausible intents with likelihood + uncertainty, rather than asserting
+        a single risk score. This acknowledges that intent cannot be definitively
+        determined from a single decontextualized frame.
         
         Args:
             features: Dictionary from VisualAnalyzer containing:
                 - faces: face detection results
-                - text: OCR results
+                - text: OCR results (with ocr_confidence field)
                 - metadata: image metadata
+            signal_confidence: float (0-1) - how reliable are extracted features
         
         Returns:
             Dictionary with:
-                - content_type: str (portrait, product, document, artistic, scenic, other)
+                - plausible_intents: List[Dict] with intent, likelihood, uncertainty, evidence
+                - content_type: str (for backwards compatibility)
                 - deception_indicators: List[str]
                 - style: str ("realistic" | "artistic" | "mixed")
-                - risk_score: float (0-1)
-                - risk_factors: Dict with individual factor scores
+                - risk_factors: Dict (for internal use)
         """
         faces = features.get('faces', {})
         text = features.get('text', {})
         metadata = features.get('metadata', {})
+        ocr_confidence = text.get('ocr_confidence', 0.5)
         
         # 1. Classify content type
         content_type, content_confidence = self._classify_content_type(faces, text, metadata)
@@ -65,22 +71,25 @@ class IntentDetector:
         # 3. Classify artistic vs realistic
         style, realism_score = self._classify_style(faces, metadata)
         
-        # 4. Calculate risk factors
+        # 4. Calculate risk factors (for internal likelihood calculation)
         risk_factors = self._calculate_risk_factors(
             faces, text, metadata, content_type, deception_indicators
         )
         
-        # 5. Calculate total risk score
-        risk_score = self._calculate_total_risk(risk_factors, style)
+        # 5. Generate plausible intents with likelihood and uncertainty
+        plausible_intents = self._generate_plausible_intents(
+            faces, text, content_type, deception_indicators, 
+            risk_factors, style, signal_confidence, ocr_confidence
+        )
         
         return {
+            "plausible_intents": plausible_intents,
             "content_type": content_type,
             "content_confidence": content_confidence,
             "deception_indicators": deception_indicators,
             "style": style,
             "realism_score": realism_score,
-            "risk_score": round(risk_score, 4),
-            "risk_factors": risk_factors
+            "risk_factors": risk_factors  # Keep for backwards compatibility
         }
     
     def _classify_content_type(
@@ -331,3 +340,124 @@ class IntentDetector:
         
         # Ensure score is between 0 and 1
         return max(0.0, min(1.0, total_risk))
+    
+    def _generate_plausible_intents(
+        self,
+        faces: Dict[str, Any],
+        text: Dict[str, Any],
+        content_type: str,
+        deception_indicators: List[str],
+        risk_factors: Dict[str, float],
+        style: str,
+        signal_confidence: float,
+        ocr_confidence: float
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate hypothesis-based plausible intents with likelihood and uncertainty.
+        
+        Returns:
+            List of intent hypotheses, each with:
+                - intent: str (artistic, impersonation, promotion, informational, other)
+                - likelihood: float (0-1)
+                - uncertainty: float (0-1) - higher = less confident
+                - evidence: List[str] - supporting observations
+        """
+        intents = []
+        
+        # Base uncertainty from signal quality and OCR confidence
+        # Lower signal/OCR confidence = higher uncertainty
+        base_uncertainty = (1.0 - signal_confidence) * 0.5 + (1.0 - ocr_confidence) * 0.3
+        base_uncertainty = min(0.7, base_uncertainty)  # Cap at 0.7
+        
+        # Always add single frame limitation uncertainty
+        base_uncertainty += 0.2
+        base_uncertainty = min(0.8, base_uncertainty)
+        
+        # 1. Artistic intent
+        artistic_likelihood = 0.0
+        artistic_evidence = []
+        if style == "artistic":
+            artistic_likelihood = 0.6
+            artistic_evidence.append("Artistic style detected")
+        if content_type == "artistic":
+            artistic_likelihood = max(artistic_likelihood, 0.5)
+            artistic_evidence.append("Artistic composition")
+        if risk_factors.get('portrait_composition', 0) < 0.3:
+            artistic_likelihood += 0.2
+        
+        if artistic_likelihood > 0.1:
+            intents.append({
+                "intent": "artistic",
+                "likelihood": round(min(artistic_likelihood, 1.0), 4),
+                "uncertainty": round(base_uncertainty, 4),
+                "evidence": artistic_evidence if artistic_evidence else ["No strong deception indicators"]
+            })
+        
+        # 2. Impersonation intent
+        impersonation_likelihood = 0.0
+        impersonation_evidence = []
+        if content_type == "portrait" and faces.get('is_portrait', False):
+            impersonation_likelihood = 0.5
+            impersonation_evidence.append("Professional portrait composition")
+        if risk_factors.get('portrait_composition', 0) > 0.5:
+            impersonation_likelihood += 0.3
+            impersonation_evidence.append("High-quality centered headshot")
+        if "headshot" in " ".join(deception_indicators).lower():
+            impersonation_likelihood += 0.2
+            impersonation_evidence.append("Professional headshot patterns detected")
+        
+        if impersonation_likelihood > 0.2:
+            intents.append({
+                "intent": "impersonation",
+                "likelihood": round(min(impersonation_likelihood, 1.0), 4),
+                "uncertainty": round(base_uncertainty + 0.1, 4),  # Higher uncertainty for deception claims
+                "evidence": impersonation_evidence
+            })
+        
+        # 3. Promotion/marketing intent
+        promotion_likelihood = 0.0
+        promotion_evidence = []
+        if risk_factors.get('financial_content', 0) > 0.3:
+            promotion_likelihood = 0.6
+            promotion_evidence.append("Financial keywords detected")
+            if ocr_confidence < 0.5:
+                promotion_evidence.append("(low OCR confidence)")
+        if risk_factors.get('testimonial_text', 0) > 0.3:
+            promotion_likelihood = max(promotion_likelihood, 0.5)
+            promotion_evidence.append("Testimonial patterns")
+        if risk_factors.get('product_promotion', 0) > 0.2:
+            promotion_likelihood += 0.3
+            promotion_evidence.append("Product promotion indicators")
+        if content_type == "product":
+            promotion_likelihood += 0.2
+        
+        if promotion_likelihood > 0.2:
+            intents.append({
+                "intent": "promotion",
+                "likelihood": round(min(promotion_likelihood, 1.0), 4),
+                "uncertainty": round(base_uncertainty + 0.15, 4),  # Higher if OCR is poor
+                "evidence": promotion_evidence
+            })
+        
+        # 4. Informational/document intent
+        if content_type == "document":
+            intents.append({
+                "intent": "informational",
+                "likelihood": 0.5,
+                "uncertainty": round(base_uncertainty + 0.1, 4),
+                "evidence": ["Document-style content", "Text-heavy composition"]
+            })
+        
+        # 5. Default "other" intent if nothing strong
+        if not intents or max(int.get('likelihood', 0) for int in intents) < 0.3:
+            intents.append({
+                "intent": "other",
+                "likelihood": 0.4,
+                "uncertainty": round(base_uncertainty + 0.2, 4),
+                "evidence": ["No strong intent indicators", "Insufficient evidence for classification"]
+            })
+        
+        # Sort by likelihood (highest first)
+        intents.sort(key=lambda x: x['likelihood'], reverse=True)
+        
+        return intents

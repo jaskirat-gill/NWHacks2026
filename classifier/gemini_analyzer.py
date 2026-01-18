@@ -1,0 +1,264 @@
+"""
+Gemini Analyzer
+
+Sends multiple frames to Gemini API for independent analysis and returns structured results.
+"""
+
+from google import genai
+import logging
+import base64
+import json
+import re
+from typing import List, Dict, Any, Optional
+from PIL import Image
+import io
+import os
+
+logger = logging.getLogger(__name__)
+
+class GeminiAnalyzer:
+    """Analyzes frames using Gemini API."""
+    
+    # Maximum timeout for Gemini API calls (seconds)
+    TIMEOUT_SECONDS = 30
+    
+    # Maximum retries for API calls
+    MAX_RETRIES = 2
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """
+        Initialize Gemini API client.
+        
+        Args:
+            api_key: Google Generative AI API key (if None, uses GEMINI_API_KEY env var)
+        """
+        api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("Gemini API key is required (provide as parameter or set GEMINI_API_KEY env var)")
+        
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = 'gemini-2.5-flash'
+        logger.info("GeminiAnalyzer initialized")
+    
+    def analyze_frames(self, image_bytes_list: List[bytes]) -> Dict[str, Any]:
+        """
+        Send 10 frames to Gemini and get structured JSON analysis.
+        
+        Args:
+            image_bytes_list: List of 10 image bytes (base64 will be computed internally)
+        
+        Returns:
+            Dictionary with structured analysis results:
+            {
+                "is_ai_likely": bool,
+                "confidence": float (0-1),
+                "aesthetic_similarity": float (0-1),
+                "severity": "LOW" | "MEDIUM" | "HIGH" | "UNCERTAIN",
+                "indicators": List[str],
+                "explanation": str
+            }
+        
+        Raises:
+            Exception: If API call fails after retries
+        """
+        if len(image_bytes_list) != 10:
+            raise ValueError(f"Expected exactly 10 frames, but received {len(image_bytes_list)}")
+        
+        prompt = self._build_prompt()
+        
+        try:
+            response = self._call_gemini_sync(prompt, image_bytes_list)
+            parsed = self._parse_response(response)
+            logger.info("Gemini analysis completed successfully")
+            return parsed
+        except Exception as e:
+            logger.error(f"Gemini analysis failed: {str(e)}", exc_info=True)
+            raise Exception(f"Gemini API call failed: {str(e)}")
+    
+    def _build_prompt(self) -> str:
+        """
+        Build prompt for Gemini asking for structured JSON analysis.
+        
+        Returns:
+            Prompt string
+        """
+        prompt = """You are analyzing 10 TikTok video frame screenshots (decontextualized, no UI elements).
+
+Analyze all frames together and provide:
+1. AI aesthetic similarity assessment (0-1 scale) - how much does this content resemble AI-generated imagery?
+2. Likelihood of deceptive intent (0-1 scale) - how likely is this content used for scams/catfishing/etc.?
+3. Risk severity (LOW/MEDIUM/HIGH/UNCERTAIN) - overall risk assessment
+4. Key visual/contextual indicators across all frames
+
+Return ONLY valid JSON (no markdown, no explanation outside JSON):
+{
+  "is_ai_likely": true/false,
+  "confidence": 0.0-1.0,
+  "aesthetic_similarity": 0.0-1.0,
+  "severity": "LOW" | "MEDIUM" | "HIGH" | "UNCERTAIN",
+  "indicators": ["indicator1", "indicator2", ...],
+  "explanation": "Brief explanation of assessment"
+}"""
+        return prompt
+    
+    def _call_gemini_sync(self, prompt: str, image_bytes_list: List[bytes]) -> str:
+        """
+        Synchronous Gemini API call with multiple images.
+        
+        Args:
+            prompt: Prompt string
+            image_bytes_list: List of image bytes to send
+        
+        Returns:
+            Response text from Gemini
+        """
+        # Build contents array - start with prompt, then add all images
+        contents = [prompt]
+        
+        # Add all 10 images as base64 inline_data
+        for i, image_bytes in enumerate(image_bytes_list):
+            try:
+                # Determine MIME type from image bytes
+                img = Image.open(io.BytesIO(image_bytes))
+                mime_type = f"image/{img.format.lower()}" if img.format else "image/jpeg"
+                
+                # Encode image to base64
+                image_b64 = base64.b64encode(image_bytes).decode()
+                
+                # Add image to contents
+                contents.append({
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": image_b64
+                    }
+                })
+                logger.debug(f"Included image {i+1}/10 in Gemini request (MIME: {mime_type})")
+            except Exception as e:
+                logger.warning(f"Failed to process image {i+1}/10 for Gemini: {str(e)}, skipping")
+                continue
+        
+        if len(contents) == 1:
+            raise Exception("No images were successfully processed for Gemini request")
+        
+        # Call Gemini API with multimodal content
+        logger.debug(f"Sending {len(contents)-1} images to Gemini...")
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=contents
+        )
+        return response.text
+    
+    def _parse_response(self, response_text: str) -> Dict[str, Any]:
+        """
+        Parse Gemini response to extract structured JSON.
+        
+        Args:
+            response_text: Raw response from Gemini
+        
+        Returns:
+            Parsed dictionary with analysis results
+        """
+        # Try to extract JSON from response
+        # Gemini sometimes wraps JSON in markdown code blocks
+        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(0))
+                # Validate and normalize the response
+                return self._normalize_response(data)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from Gemini response: {str(e)}")
+                logger.debug(f"Response text: {response_text[:500]}...")
+        
+        # If JSON parsing fails, try to extract key-value pairs manually
+        logger.warning("JSON parsing failed, attempting fallback extraction")
+        return self._fallback_parse(response_text)
+    
+    def _normalize_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize and validate Gemini response data.
+        
+        Args:
+            data: Parsed JSON data from Gemini
+        
+        Returns:
+            Normalized dictionary
+        """
+        # Default values
+        result = {
+            "is_ai_likely": False,
+            "confidence": 0.5,
+            "aesthetic_similarity": 0.5,
+            "severity": "UNCERTAIN",
+            "indicators": [],
+            "explanation": ""
+        }
+        
+        # Extract values with type checking
+        if "is_ai_likely" in data:
+            result["is_ai_likely"] = bool(data["is_ai_likely"])
+        
+        if "confidence" in data:
+            conf = float(data["confidence"])
+            result["confidence"] = max(0.0, min(1.0, conf))
+        
+        if "aesthetic_similarity" in data:
+            sim = float(data["aesthetic_similarity"])
+            result["aesthetic_similarity"] = max(0.0, min(1.0, sim))
+        
+        if "severity" in data:
+            sev = str(data["severity"]).upper()
+            if sev in ["LOW", "MEDIUM", "HIGH", "UNCERTAIN"]:
+                result["severity"] = sev
+        
+        if "indicators" in data and isinstance(data["indicators"], list):
+            result["indicators"] = [str(ind) for ind in data["indicators"]]
+        
+        if "explanation" in data:
+            result["explanation"] = str(data["explanation"])
+        
+        return result
+    
+    def _fallback_parse(self, response_text: str) -> Dict[str, Any]:
+        """
+        Fallback parsing when JSON extraction fails.
+        
+        Args:
+            response_text: Raw response text
+        
+        Returns:
+            Dictionary with best-effort extracted values
+        """
+        result = {
+            "is_ai_likely": False,
+            "confidence": 0.5,
+            "aesthetic_similarity": 0.5,
+            "severity": "UNCERTAIN",
+            "indicators": [],
+            "explanation": response_text[:500]  # Use first 500 chars as explanation
+        }
+        
+        # Try to extract severity mentions
+        severity_patterns = {
+            "HIGH": re.compile(r'\bHIGH\b', re.IGNORECASE),
+            "MEDIUM": re.compile(r'\bMEDIUM\b', re.IGNORECASE),
+            "LOW": re.compile(r'\bLOW\b', re.IGNORECASE),
+            "UNCERTAIN": re.compile(r'\bUNCERTAIN\b', re.IGNORECASE)
+        }
+        
+        for severity, pattern in severity_patterns.items():
+            if pattern.search(response_text):
+                result["severity"] = severity
+                break
+        
+        # Try to extract confidence values
+        confidence_match = re.search(r'confidence[:\s]+([0-9.]+)', response_text, re.IGNORECASE)
+        if confidence_match:
+            try:
+                conf = float(confidence_match.group(1))
+                result["confidence"] = min(1.0, max(0.0, conf / 100.0 if conf > 1.0 else conf))
+            except ValueError:
+                pass
+        
+        return result
+

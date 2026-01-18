@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from detector import AIImageDetector
 from models import DetectionResult
 import logging
-from typing import Dict
+from typing import Dict, List
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -52,17 +52,17 @@ async def health_check():
 @app.post("/analyze/{analysis_id}")
 async def analyze_image(
     analysis_id: str = Path(..., description="Unique identifier for this analysis"),
-    file: UploadFile = File(...)
+    files: List[UploadFile] = File(...)
 ):
     """
-    Analyze an uploaded image and store the result in memory.
+    Analyze uploaded images (10 frames) and store the result in memory.
     
     The analysis is stored with the provided ID and can be retrieved later
     using GET /analyze/{analysis_id}.
     
     Args:
         analysis_id: Unique identifier for this analysis (path parameter)
-        file: Image file (multipart/form-data)
+        files: List of image files (multipart/form-data) - exactly 10 files expected
     
     Returns:
         JSON response indicating success:
@@ -72,26 +72,36 @@ async def analyze_image(
             "message": "Analysis stored successfully"
         }
     """
-    # Validate content type
-    if not file.content_type or not file.content_type.startswith("image/"):
+    # Validate file count (should be 10 frames)
+    if len(files) != 10:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type: {file.content_type}. Expected an image file."
+            detail=f"Expected exactly 10 image files, but received {len(files)}"
         )
+    
+    # Validate content types
+    for i, file in enumerate(files):
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type for file {i+1}: {file.content_type}. Expected an image file."
+            )
     
     # Check if analysis_id already exists
     if analysis_id in analysis_results:
         logger.warning(f"Analysis ID {analysis_id} already exists, overwriting...")
     
     try:
-        # Read image bytes
-        image_bytes = await file.read()
+        # Read all image bytes
+        image_bytes_list = []
+        for i, file in enumerate(files):
+            image_bytes = await file.read()
+            if len(image_bytes) == 0:
+                raise HTTPException(status_code=400, detail=f"Empty file uploaded: file {i+1}")
+            image_bytes_list.append(image_bytes)
         
-        if len(image_bytes) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-        
-        # Run complete detection pipeline
-        detection_result = detector.analyze(image_bytes)
+        # Run complete detection pipeline (handles both single and multi-frame)
+        detection_result = detector.analyze(image_bytes_list)
         
         # Store result in memory
         analysis_results[analysis_id] = detection_result
@@ -107,14 +117,14 @@ async def analyze_image(
         })
         
     except Exception as e:
-        logger.error(f"Error processing image: {str(e)}", exc_info=True)
+        logger.error(f"Error processing images: {str(e)}", exc_info=True)
         
         if isinstance(e, HTTPException):
             raise e
         
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing image: {str(e)}"
+            detail=f"Error processing images: {str(e)}"
         )
 
 
