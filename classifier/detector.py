@@ -146,6 +146,47 @@ class AIImageDetector:
             }
             ocr_confidence = 0.5
         
+        # EARLY EXIT: Check OCR text for AI-related keywords
+        text_found = visual_features.get("text", {}).get("text_found", "").lower()
+        ai_keywords = ["sora", "invideo", "fake", "ai", "artificial intelligence", "generated", "deepfake"]
+        
+        detected_keyword = None
+        for keyword in ai_keywords:
+            if keyword in text_found:
+                detected_keyword = keyword
+                break
+        
+        if detected_keyword:
+            logger.info(f"EARLY EXIT: AI keyword '{detected_keyword}' detected in OCR text. Marking as AI immediately.")
+            # Return immediate AI detection result
+            return DetectionResult(
+                is_ai=True,
+                confidence=0.95,  # High confidence due to explicit keyword
+                severity="HIGH",
+                reasons=[
+                    "Based on a single TikTok video frame screenshot (no UI elements)...",
+                    "Without platform context or temporal information...",
+                    f"OCR detected AI-related keyword '{detected_keyword}' in image text, indicating AI-generated content.",
+                    "This assessment may change with additional context."
+                ],
+                risk_factors={
+                    "early_exit_trigger": "ocr_keyword_match",
+                    "detected_keyword": detected_keyword,
+                    "content_type": "other"
+                },
+                classifier_scores={},
+                screenshot_confidence=1.0,
+                signal_confidence=signal_confidence,
+                aesthetic_similarity_score=0.95,  # Assume high similarity when keyword is present
+                context_loss_penalty=0.3,
+                plausible_intents=[{
+                    "intent": "ai_generated",
+                    "likelihood": 0.95,
+                    "uncertainty": 0.05,
+                    "evidence": [f"Keyword '{detected_keyword}' detected in text"]
+                }]
+            )
+        
         # Step 3: Hypothesis-Based Intent Detection
         logger.debug("Running intent detection...")
         try:
