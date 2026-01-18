@@ -243,6 +243,11 @@ async def get_education(analysis_id: str = Path(..., description="Unique identif
         
         logger.info(f"Found {len(frame_files)} frames for {analysis_id}")
         
+        # Skip the first 2 frames (often captured during scroll transition)
+        start_offset = 2
+        if len(frame_files) > start_offset:
+            frame_files = frame_files[start_offset:]
+        
         # Select up to 5 representative frames (evenly spaced)
         max_frames = 5
         if len(frame_files) > max_frames:

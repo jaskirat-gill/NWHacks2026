@@ -19,7 +19,7 @@ let detectionCache: Map<string, DetectionResult> = new Map();
 let lastDetectionTime = 0;
 let detectionInFlight = false;
 let lastScreenshotBuffer: Buffer | null = null;
-let showDebugBox = true;  // Toggle with Cmd+Shift+D
+let showDebugBox = false;  // Toggle with Cmd+Shift+D
 let detectionEnabled = true;  // Detection enabled/disabled state
 
 // Continuous screenshot loop state
@@ -508,6 +508,55 @@ app.whenReady().then(() => {
       console.error(`[IPC] Education request failed:`, error);
       throw error;
     }
+  });
+
+  // Handle toggle detection from control panel
+  ipcMain.handle('toggle-detection', () => {
+    detectionEnabled = !detectionEnabled;
+    console.log(`[IPC] Detection ${detectionEnabled ? 'enabled' : 'disabled'}`);
+    
+    // Notify control window of state change
+    if (controlWindow && !controlWindow.isDestroyed()) {
+      controlWindow.webContents.send('detection-state-changed', { enabled: detectionEnabled });
+    }
+    
+    return { enabled: detectionEnabled };
+  });
+
+  // Handle get detection state
+  ipcMain.handle('get-detection-state', () => {
+    return { enabled: detectionEnabled };
+  });
+
+  // Handle get screenshots - returns screenshots grouped by post ID
+  ipcMain.handle('get-screenshots', () => {
+    const screenshotsDir = path.resolve(__dirname, '..', '..', 'screenshots');
+    
+    if (!fs.existsSync(screenshotsDir)) {
+      return {};
+    }
+    
+    const files = fs.readdirSync(screenshotsDir).filter(f => f.endsWith('.jpg') || f.endsWith('.png'));
+    const grouped: { [postId: string]: string[] } = {};
+    
+    for (const file of files) {
+      // Extract post ID from filename (e.g., "post_42_frame0_123456.jpg" -> "post_42")
+      const match = file.match(/^(post_\d+)/);
+      if (match) {
+        const postId = match[1];
+        if (!grouped[postId]) {
+          grouped[postId] = [];
+        }
+        grouped[postId].push(file);
+      }
+    }
+    
+    return grouped;
+  });
+
+  // Handle get screenshots directory path
+  ipcMain.handle('get-screenshots-dir', () => {
+    return path.resolve(__dirname, '..', '..', 'screenshots');
   });
 
   // Register debug shortcut (Cmd+Shift+S to save screenshot)

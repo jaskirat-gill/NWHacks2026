@@ -22,17 +22,7 @@ export interface EducationData {
   };
 }
 
-// Augment the global Window interface with electronAPI from preload
-declare global {
-  interface Window {
-    electronAPI: {
-      onOverlayUpdate: (callback: (state: OverlayState) => void) => void;
-      setIgnoreMouseEvents: (ignore: boolean) => void;
-      requestEducation: (postId: string) => Promise<EducationData>;
-    };
-  }
-}
-
+// Complete ElectronAPI interface with all methods
 export interface ElectronAPI {
   onOverlayUpdate: (callback: (state: OverlayState) => void) => void;
   toggleDetection: () => Promise<{ enabled: boolean }>;
@@ -41,8 +31,10 @@ export interface ElectronAPI {
   getScreenshotsDir: () => Promise<string>;
   onDetectionStateChanged: (callback: (state: { enabled: boolean }) => void) => void;
   setIgnoreMouseEvents: (ignore: boolean) => void;
+  requestEducation: (postId: string) => Promise<EducationData>;
 }
 
+// Augment the global Window interface with electronAPI from preload
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
@@ -51,6 +43,7 @@ declare global {
 
 export interface ThreatEntry {
   id: number;
+  postId: string;  // Post ID string for API calls (e.g., "post_1")
   timestamp: string;
   riskLevel: "HIGH" | "MEDIUM" | "LOW";
   score: number;
