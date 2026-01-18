@@ -14,32 +14,54 @@ export function ThreatLog({ threats }: ThreatLogProps) {
     ? threats 
     : threats.filter(t => t.riskLevel === filter)
 
-  const getRiskStyles = (level: ThreatEntry["riskLevel"]) => {
-    switch (level) {
-      case "HIGH":
-        return {
-          icon: AlertTriangle,
-          bg: "bg-destructive/10",
-          border: "border-destructive/30",
-          text: "text-destructive",
-          badge: "bg-destructive/20 text-destructive",
-        }
-      case "MEDIUM":
-        return {
-          icon: AlertCircle,
-          bg: "bg-warning/10",
-          border: "border-warning/30",
-          text: "text-warning",
-          badge: "bg-warning/20 text-warning",
-        }
-      case "LOW":
-        return {
-          icon: Info,
-          bg: "bg-primary/10",
-          border: "border-primary/30",
-          text: "text-primary",
-          badge: "bg-primary/20 text-primary",
-        }
+  const getRiskStyles = (threat: ThreatEntry) => {
+    const confidence = threat.score;
+    const is_ai = threat.is_ai;
+    
+    // is_ai=true, confidence > 80: likely AI → HIGH (red)
+    if (is_ai && confidence > 80) {
+      return {
+        icon: AlertTriangle,
+        bg: "bg-destructive/10",
+        border: "border-destructive/30",
+        text: "text-destructive",
+        badge: "bg-destructive/20 text-destructive",
+        label: "LIKELY AI",
+      }
+    }
+    
+    // is_ai=true, confidence 60-80: possibly AI → MEDIUM (orange)
+    if (is_ai && confidence >= 60 && confidence <= 80) {
+      return {
+        icon: AlertCircle,
+        bg: "bg-warning/10",
+        border: "border-warning/30",
+        text: "text-warning",
+        badge: "bg-warning/20 text-warning",
+        label: "POSSIBLY AI",
+      }
+    }
+    
+    // is_ai=false, confidence > 60: likely real → LOW (green)
+    if (!is_ai && confidence > 60) {
+      return {
+        icon: Info,
+        bg: "bg-success/10",
+        border: "border-success/30",
+        text: "text-success",
+        badge: "bg-success/20 text-success",
+        label: "LIKELY REAL",
+      }
+    }
+    
+    // confidence < 60: unclear → LOW (muted)
+    return {
+      icon: Info,
+      bg: "bg-muted/10",
+      border: "border-border/30",
+      text: "text-muted-foreground",
+      badge: "bg-muted/20 text-muted-foreground",
+      label: "UNCLEAR",
     }
   }
 
@@ -102,7 +124,7 @@ export function ThreatLog({ threats }: ThreatLogProps) {
           </div>
         ) : (
           filteredThreats.map((threat) => {
-            const styles = getRiskStyles(threat.riskLevel)
+            const styles = getRiskStyles(threat)
             const isExpanded = expandedId === threat.id
 
             return (
@@ -126,7 +148,7 @@ export function ThreatLog({ threats }: ThreatLogProps) {
                         <div>
                           <div className="flex items-center gap-2 mb-1">
                             <span className={`px-2 py-0.5 rounded text-xs font-semibold ${styles.badge}`}>
-                              {threat.riskLevel}
+                              {styles.label}
                             </span>
                             <span className="px-2 py-0.5 rounded bg-secondary text-xs font-medium text-muted-foreground">
                               {threat.threatType}

@@ -20,12 +20,25 @@ declare global {
 
 type Tab = 'control' | 'history';
 
+const API_BASE_URL = 'http://localhost:8000';
+
+interface DetectionResult {
+  is_ai: boolean;
+  confidence: number;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNCERTAIN';
+  reasons: string[];
+  risk_factors: Record<string, any>;
+  classifier_scores?: Record<string, number>;
+  plausible_intents?: Array<Record<string, any>>;
+}
+
 const ControlApp: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('control');
   const [isMonitoring, setIsMonitoring] = useState<boolean>(false);
   const [threats, setThreats] = useState<ThreatEntry[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [loadingThreats, setLoadingThreats] = useState(false);
 
   useEffect(() => {
     // Update current time every second
@@ -46,6 +59,115 @@ const ControlApp: React.FC = () => {
       setIsMonitoring(state.enabled);
     });
   }, []);
+
+  // Load threats from API based on screenshots
+  useEffect(() => {
+    loadThreats();
+  }, []);
+
+  const loadThreats = async () => {
+    try {
+      setLoadingThreats(true);
+      
+      // Get all screenshots grouped by post ID
+      const screenshots = await window.electronAPI.getScreenshots();
+      const postIds = Object.keys(screenshots);
+      
+      if (postIds.length === 0) {
+        setThreats([]);
+        setLoadingThreats(false);
+        return;
+      }
+
+      // Fetch analysis for each post ID
+      const threatPromises = postIds.map(async (postId): Promise<ThreatEntry | null> => {
+        try {
+          const response = await fetch(`${API_BASE_URL}/analyze/${postId}`);
+          
+          if (!response.ok) {
+            // If analysis doesn't exist yet (404), skip this post
+            if (response.status === 404) {
+              console.log(`Analysis not found for post ${postId}`);
+              return null;
+            }
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const analysis: DetectionResult = await response.json();
+          
+          // Convert DetectionResult to ThreatEntry
+          const threatEntry: ThreatEntry = {
+            id: parseInt(postId.replace('post_', '')) || Date.now(),
+            timestamp: new Date().toISOString(), // You might want to extract from filename or API
+            riskLevel: mapSeverityToRiskLevel(analysis),
+            score: Math.round(analysis.confidence * 100),
+            description: generateDescription(analysis),
+            screenshot: screenshots[postId][0] || '', // Use first screenshot
+            coordinates: { x: 0, y: 0 }, // Not available from API
+            indicators: analysis.reasons || [],
+            threatType: analysis.is_ai ? 'AI-Generated' : 'Human-Created',
+            is_ai: analysis.is_ai,
+          };
+          
+          return threatEntry;
+        } catch (error) {
+          console.error(`Error fetching analysis for ${postId}:`, error);
+          return null;
+        }
+      });
+
+      const threatResults = await Promise.all(threatPromises);
+      const validThreats = threatResults.filter((t): t is ThreatEntry => t !== null);
+      
+      // Sort by post ID (most recent first)
+      validThreats.sort((a, b) => b.id - a.id);
+      
+      setThreats(validThreats);
+    } catch (error) {
+      console.error('Error loading threats:', error);
+    } finally {
+      setLoadingThreats(false);
+    }
+  };
+
+  const mapSeverityToRiskLevel = (analysis: DetectionResult): "HIGH" | "MEDIUM" | "LOW" => {
+    const confidence = analysis.confidence * 100;
+    
+    // is_ai=true, confidence > 80: likely AI → HIGH (red)
+    if (analysis.is_ai && confidence > 80) {
+      return 'HIGH';
+    }
+    
+    // is_ai=true, confidence 60-80: possibly AI → MEDIUM (orange)
+    if (analysis.is_ai && confidence >= 60 && confidence <= 80) {
+      return 'MEDIUM';
+    }
+    
+    // is_ai=false, confidence > 60: likely real → LOW (green)
+    // confidence < 60: unclear → LOW (muted)
+    // All other cases → LOW
+    return 'LOW';
+  };
+
+  const generateDescription = (analysis: DetectionResult): string => {
+    const confidence = Math.round(analysis.confidence * 100);
+    
+    if (analysis.is_ai) {
+      if (confidence > 80) {
+        return `Likely AI-generated content (${confidence}% confidence)`;
+      } else if (confidence >= 60) {
+        return `Possibly AI-generated content (${confidence}% confidence)`;
+      } else {
+        return `Unclear - may be AI-generated (${confidence}% confidence)`;
+      }
+    } else {
+      if (confidence > 60) {
+        return `Likely real content (${confidence}% confidence)`;
+      } else {
+        return `Unclear content classification (${confidence}% confidence)`;
+      }
+    }
+  };
 
   const handleStartMonitoring = async () => {
     try {
@@ -142,7 +264,13 @@ const ControlApp: React.FC = () => {
 
                   {/* Main content - Threat Log */}
                   <div className="lg:col-span-9">
-                    <ThreatLog threats={threats} />
+                    {loadingThreats ? (
+                      <div className="bg-card/50 backdrop-blur-sm border border-border rounded-xl p-12 text-center">
+                        <p className="text-muted-foreground">Loading threat analysis...</p>
+                      </div>
+                    ) : (
+                      <ThreatLog threats={threats} />
+                    )}
                   </div>
                 </div>
               </main>
