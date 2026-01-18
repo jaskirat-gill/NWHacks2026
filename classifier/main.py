@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Path
+from fastapi import FastAPI, File, UploadFile, HTTPException, Path, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from detector import AIImageDetector
@@ -9,7 +9,8 @@ import logging
 import os
 import glob
 import base64
-from typing import Dict, List, Optional, Tuple
+import json
+from typing import Dict, List, Optional, Tuple, Set
 from dotenv import load_dotenv
 import os
 
@@ -65,6 +66,10 @@ SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'screenshots')
 # Key: analysis_id (string), Value: Tuple[DetectionResult, bytes] (result and original image bytes)
 analysis_results: Dict[str, Tuple[DetectionResult, bytes]] = {}
 
+# WebSocket connections for pushing results
+# Key: analysis_id (string), Value: Set of WebSocket connections
+active_connections: Dict[str, Set[WebSocket]] = {}
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -82,6 +87,87 @@ async def list_analyses():
         "count": len(analysis_results),
         "analysis_ids": list(analysis_results.keys())
     }
+
+
+@app.websocket("/ws/analysis/{analysis_id}")
+async def websocket_analysis(websocket: WebSocket, analysis_id: str):
+    """
+    WebSocket endpoint for receiving push notifications when analysis completes.
+    
+    Clients connect to this endpoint to receive real-time updates when analysis
+    results are ready. The server will push the result as soon as it's available.
+    
+    Args:
+        websocket: WebSocket connection
+        analysis_id: Unique identifier for the analysis (path parameter)
+    """
+    await websocket.accept()
+    logger.info(f"WebSocket client connected for analysis_id: {analysis_id}")
+    
+    # Add connection to active connections set
+    if analysis_id not in active_connections:
+        active_connections[analysis_id] = set()
+    active_connections[analysis_id].add(websocket)
+    
+    # If result already exists, send it immediately
+    if analysis_id in analysis_results:
+        detection_result, _ = analysis_results[analysis_id]
+        try:
+            await websocket.send_json(detection_result.to_dict())
+            logger.info(f"Sent existing result to WebSocket client for {analysis_id}")
+        except Exception as e:
+            logger.error(f"Error sending existing result to WebSocket: {e}")
+    
+    try:
+        # Keep connection alive and wait for disconnect
+        while True:
+            # Wait for ping or disconnect
+            data = await websocket.receive_text()
+            # Echo back ping messages for connection health check
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket client disconnected for analysis_id: {analysis_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for {analysis_id}: {e}")
+    finally:
+        # Remove connection from active connections
+        if analysis_id in active_connections:
+            active_connections[analysis_id].discard(websocket)
+            # Clean up empty sets
+            if not active_connections[analysis_id]:
+                del active_connections[analysis_id]
+
+
+async def push_result(analysis_id: str, result: DetectionResult):
+    """
+    Push analysis result to all connected WebSocket clients for this analysis_id.
+    
+    Args:
+        analysis_id: Unique identifier for the analysis
+        result: DetectionResult to push to clients
+    """
+    if analysis_id not in active_connections:
+        return
+    
+    result_dict = result.to_dict()
+    disconnected = set()
+    
+    for websocket in active_connections[analysis_id]:
+        try:
+            await websocket.send_json(result_dict)
+            logger.info(f"Pushed result to WebSocket client for {analysis_id}")
+        except Exception as e:
+            logger.warning(f"Error pushing result to WebSocket: {e}")
+            disconnected.add(websocket)
+    
+    # Remove disconnected connections
+    for ws in disconnected:
+        active_connections[analysis_id].discard(ws)
+    
+    # Clean up empty sets
+    if analysis_id in active_connections and not active_connections[analysis_id]:
+        del active_connections[analysis_id]
 
 
 @app.post("/analyze/{analysis_id}")
@@ -145,6 +231,9 @@ async def analyze_image(
         logger.info(f"Analysis stored with ID {analysis_id}: {detection_result.severity} severity "
                    f"({'AI' if detection_result.is_ai else 'Human'}, "
                    f"{detection_result.confidence:.0%} confidence)")
+        
+        # Push result to connected WebSocket clients
+        await push_result(analysis_id, detection_result)
         
         return JSONResponse(content={
             "status": "success",
