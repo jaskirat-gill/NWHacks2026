@@ -5,10 +5,10 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { DomSensorMessage, DetectionResult, OverlayState, EducationData } from './types';
 import { captureAndCrop, saveDebugScreenshot, CropRegion } from './screenshot';
 import { startFileWatcher, stopFileWatcher } from './fileWatcher';
-import { detectAI } from './detectorStub';
 
 // API base URL
 const API_BASE_URL = 'http://127.0.0.1:8000';
+const WS_API_BASE_URL = 'ws://127.0.0.1:8000';
 
 // State
 let overlayWindow: BrowserWindow | null = null;
@@ -21,6 +21,129 @@ let detectionInFlight = false;
 let lastScreenshotBuffer: Buffer | null = null;
 let showDebugBox = true;  // Toggle with Cmd+Shift+D
 let detectionEnabled = true;  // Detection enabled/disabled state
+
+// WebSocket connection to FastAPI for push notifications
+let apiWebSocket: WebSocket | null = null;
+let currentApiPostId: string | null = null;
+
+// Extract base post ID (just "post_X" part)
+function extractBasePostId(fullPostId: string): string {
+  const match = fullPostId.match(/^(post_\d+)/);
+  if (match) {
+    return match[1];
+  }
+  return fullPostId;
+}
+
+// Connect to FastAPI WebSocket for push notifications
+function connectApiWebSocket(postId: string): void {
+  // Extract base post ID to match what fileWatcher sends to the API
+  const basePostId = extractBasePostId(postId);
+  
+  // If already connected for this post, no need to reconnect
+  if (apiWebSocket && currentApiPostId === basePostId) {
+    return;
+  }
+  
+  // Disconnect previous connection if exists
+  disconnectApiWebSocket();
+  
+  const wsUrl = `${WS_API_BASE_URL}/ws/analysis/${basePostId}`;
+  console.log(`[WebSocket] Connecting to ${wsUrl} for post ${postId} (base: ${basePostId})`);
+  
+  try {
+    apiWebSocket = new WebSocket(wsUrl);
+    currentApiPostId = basePostId;
+    
+    apiWebSocket.on('open', () => {
+      console.log(`[WebSocket] Connected to FastAPI WebSocket for ${basePostId}`);
+    });
+    
+    apiWebSocket.on('message', (data: Buffer) => {
+      try {
+        const resultData = JSON.parse(data.toString());
+        console.log(`[WebSocket] Received push notification for ${basePostId}:`, resultData);
+        
+        // Find the current post that matches this basePostId
+        const post = currentPost?.post;
+        if (!post) {
+          console.log(`[WebSocket] Received result for ${basePostId}, but no current post. Ignoring.`);
+          return;
+        }
+        
+        const currentPostId = post.id;
+        if (extractBasePostId(currentPostId) !== basePostId) {
+          console.log(`[WebSocket] Received result for ${basePostId}, but current post doesn't match. Ignoring.`);
+          return;
+        }
+        
+        // Map API response to DetectionResult format
+        const result: DetectionResult = {
+          postId: currentPostId, // Use full post ID from current post
+          score: resultData.confidence || 0,
+          label: mapApiResponseToLabel(resultData.is_ai, resultData.confidence),
+          timestamp: Date.now(),
+        };
+        
+        // Cache the result
+        detectionCache.set(currentPostId, result);
+        
+        // Update overlay (post is guaranteed to be non-null after the check above)
+        updateOverlayWithDetection(post, result);
+        // Stop screenshot loop once we have a result
+        stopScreenshotLoop();
+      } catch (err) {
+        console.error(`[WebSocket] Error parsing push notification:`, err);
+      }
+    });
+    
+    apiWebSocket.on('error', (error) => {
+      console.error(`[WebSocket] Error for ${basePostId}:`, error);
+    });
+    
+    apiWebSocket.on('close', () => {
+      console.log(`[WebSocket] Disconnected from FastAPI WebSocket for ${basePostId}`);
+      if (currentApiPostId === basePostId) {
+        apiWebSocket = null;
+        currentApiPostId = null;
+      }
+    });
+  } catch (err) {
+    console.error(`[WebSocket] Failed to connect to ${wsUrl}:`, err);
+    apiWebSocket = null;
+    currentApiPostId = null;
+  }
+}
+
+// Disconnect from FastAPI WebSocket
+function disconnectApiWebSocket(): void {
+  if (apiWebSocket) {
+    console.log(`[WebSocket] Disconnecting from FastAPI WebSocket for ${currentApiPostId}`);
+    apiWebSocket.removeAllListeners();
+    apiWebSocket.close();
+    apiWebSocket = null;
+    currentApiPostId = null;
+  }
+}
+
+// Map API response to DetectionResult label format
+function mapApiResponseToLabel(isAI: boolean, confidence: number): DetectionResult['label'] {
+  // Low confidence = unclear
+  if (confidence < 0.6) {
+    return 'Unclear';
+  }
+  
+  if (isAI) {
+    // AI detected - differentiate by confidence
+    if (confidence >= 0.8) {
+      return 'Likely AI';      // High confidence AI
+    }
+    return 'Possibly AI';      // Medium confidence AI
+  }
+  
+  // Not AI detected
+  return 'Likely Real';
+}
 
 // Continuous screenshot loop state
 let screenshotLoop: NodeJS.Timeout | null = null;
@@ -130,8 +253,9 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
   currentPost = message;
 
   if (!message.post) {
-    // No active post, stop screenshot loop and hide overlay
+    // No active post, stop screenshot loop, disconnect WebSocket, and hide overlay
     stopScreenshotLoop();
+    disconnectApiWebSocket();
     updateOverlay({
       visible: false,
       x: 0,
@@ -152,10 +276,13 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
   // Check cache for existing detection (with valid, non-Analyzing result)
   const cached = detectionCache.get(post.id);
   if (cached && cached.label !== 'Analyzing...' && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    // Use cached result - no need to start screenshot loop
+    // Use cached result - no need to start screenshot loop or WebSocket
     updateOverlayWithDetection(post, cached);
     return;
   }
+
+  // Connect to WebSocket for push notifications when analysis completes
+  connectApiWebSocket(post.id);
 
   // No valid cached result - start screenshot capture for this post
   startScreenshotLoop(message);
@@ -214,21 +341,9 @@ async function triggerDetection(message: DomSensorMessage): Promise<void> {
     lastScreenshotBuffer = screenshot.buffer;
     console.log(`[Screenshot] Captured ${screenshot.width}x${screenshot.height}, ${screenshot.buffer.length} bytes`);
 
-    // Run detection on the cropped image
-    const result = await detectAI(screenshot.buffer, post.id);
-
-    // Only cache real results, not "Analyzing..." pending state
-    // This ensures we keep polling until we get a real result
-    if (result.label !== 'Analyzing...') {
-      detectionCache.set(post.id, result);
-      // Clean old cache entries
-      cleanCache();
-    }
-
-    // Update overlay if this is still the current post
-    if (currentPost?.post?.id === post.id) {
-      updateOverlayWithDetection(post, result);
-    }
+    // Note: Results are now received via WebSocket push notifications
+    // triggerDetection is mainly for initial screenshot capture
+    // The actual result will come via WebSocket when analysis completes
   } catch (err) {
     console.error('Detection error:', err);
   } finally {
@@ -322,26 +437,9 @@ async function captureFrame(message: DomSensorMessage): Promise<void> {
     // Also store for debug saving via hotkey
     lastScreenshotBuffer = screenshot.buffer;
 
-    // Fetch latest detection result from API and update overlay
-    // The fileWatcher sends images to the API, we just query for results
-    try {
-      const result = await detectAI(screenshot.buffer, post.id);
-      
-      // Only cache and update if we got a real result (not "Analyzing...")
-      if (result.label !== 'Analyzing...') {
-        detectionCache.set(post.id, result);
-        console.log(`[ScreenshotLoop] Got result for ${post.id}: ${result.label}, stopping capture loop`);
-        // Stop the loop now that we have a result
-        stopScreenshotLoop();
-      }
-      
-      // Update overlay if this is still the current post
-      if (currentPost?.post?.id === post.id) {
-        updateOverlayWithDetection(post, result);
-      }
-    } catch (err) {
-      console.error(`[ScreenshotLoop] Error fetching detection for frame ${frameCounter}:`, err);
-    }
+    // Note: Results are now received via WebSocket push notifications
+    // No need to poll here - WebSocket will handle result delivery
+    // The screenshot loop just saves frames for debugging/education purposes
   }
 }
 
@@ -445,15 +543,6 @@ function toggleDebugBox(): void {
   }
 }
 
-// Extract base post ID (just "post_X" part)
-function extractBasePostId(fullPostId: string): string {
-  const match = fullPostId.match(/^(post_\d+)/);
-  if (match) {
-    return match[1];
-  }
-  return fullPostId;
-}
-
 // Fetch educational content from the API
 async function fetchEducation(postId: string): Promise<EducationData> {
   const basePostId = extractBasePostId(postId);
@@ -542,6 +631,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   stopScreenshotLoop();
+  disconnectApiWebSocket();
   stopFileWatcher();
   if (wsServer) {
     wsServer.close();
