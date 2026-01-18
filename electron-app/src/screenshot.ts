@@ -2,6 +2,10 @@ import { desktopCapturer, screen, NativeImage } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// Save screenshots to project root (outside electron-app/) so classifier can access them
+// __dirname is electron-app/dist/ when compiled, so go up 2 levels to reach project root
+const SCREENSHOTS_DIR = path.resolve(__dirname, '..', '..', 'screenshots');
+
 export interface CropRegion {
   x: number;
   y: number;
@@ -111,11 +115,10 @@ export async function captureAndCrop(region: CropRegion): Promise<ScreenshotResu
     if (cropped.isEmpty()) {
       console.error('[Screenshot] Cropped image is empty!');
       // Save full thumbnail for debugging
-      const debugDir = path.join(process.cwd(), 'debug-screenshots');
-      if (!fs.existsSync(debugDir)) {
-        fs.mkdirSync(debugDir, { recursive: true });
+      if (!fs.existsSync(SCREENSHOTS_DIR)) {
+        fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
       }
-      fs.writeFileSync(path.join(debugDir, `full_thumb_${Date.now()}.jpg`), thumbnail.toJPEG(85));
+      fs.writeFileSync(path.join(SCREENSHOTS_DIR, `full_thumb_${Date.now()}.jpg`), thumbnail.toJPEG(85));
       console.log('[Screenshot] Saved full thumbnail for debugging');
       return null;
     }
@@ -136,29 +139,28 @@ export async function captureAndCrop(region: CropRegion): Promise<ScreenshotResu
 }
 
 /**
- * Save a screenshot buffer to disk for debugging
+ * Save a screenshot buffer to disk for classifier processing
  * @param buffer - JPEG buffer to save
  * @param filename - Optional filename (defaults to timestamp)
  */
 export async function saveDebugScreenshot(buffer: Buffer, filename?: string): Promise<string | null> {
   try {
-    // Create debug directory if it doesn't exist
-    const debugDir = path.join(process.cwd(), 'debug-screenshots');
-    if (!fs.existsSync(debugDir)) {
-      fs.mkdirSync(debugDir, { recursive: true });
+    // Create screenshots directory if it doesn't exist
+    if (!fs.existsSync(SCREENSHOTS_DIR)) {
+      fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
     }
 
     // Generate filename
     const name = filename || `screenshot_${Date.now()}.jpg`;
-    const filePath = path.join(debugDir, name);
+    const filePath = path.join(SCREENSHOTS_DIR, name);
 
     // Write file
     fs.writeFileSync(filePath, buffer);
-    console.log('Debug screenshot saved:', filePath);
+    console.log('Screenshot saved:', filePath);
 
     return filePath;
   } catch (error) {
-    console.error('Failed to save debug screenshot:', error);
+    console.error('Failed to save screenshot:', error);
     return null;
   }
 }

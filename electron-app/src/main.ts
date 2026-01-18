@@ -15,8 +15,14 @@ let detectionInFlight = false;
 let lastScreenshotBuffer: Buffer | null = null;
 let showDebugBox = true;  // Toggle with Cmd+Shift+D
 
+// Continuous screenshot loop state
+let screenshotLoop: NodeJS.Timeout | null = null;
+let currentScreenshotPostId: string | null = null;
+let frameCounter = 0;
+
 const DETECTION_THROTTLE_MS = 2000;
 const CACHE_TTL_MS = 5000;
+const SCREENSHOT_INTERVAL_MS = 1000; // Capture every 1 second
 
 // Create transparent overlay window
 function createOverlayWindow(): void {
@@ -85,7 +91,8 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
   currentPost = message;
 
   if (!message.post) {
-    // No active post, hide overlay
+    // No active post, stop screenshot loop and hide overlay
+    stopScreenshotLoop();
     updateOverlay({
       visible: false,
       x: 0,
@@ -101,6 +108,9 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
   }
 
   const { post, dpr } = message;
+
+  // Start continuous screenshot capture for this post
+  startScreenshotLoop(message);
 
   // Check cache for existing detection
   const cached = detectionCache.get(post.id);
@@ -219,6 +229,79 @@ function cleanCache(): void {
   }
 }
 
+// ============ Continuous Screenshot Loop ============
+
+// Stop the screenshot loop
+function stopScreenshotLoop(): void {
+  if (screenshotLoop) {
+    clearInterval(screenshotLoop);
+    screenshotLoop = null;
+    console.log(`[ScreenshotLoop] Stopped. Captured ${frameCounter} frames for post ${currentScreenshotPostId}`);
+  }
+  currentScreenshotPostId = null;
+}
+
+// Capture a single frame and save to disk
+async function captureFrame(message: DomSensorMessage): Promise<void> {
+  if (!message.post) return;
+
+  const { post, dpr } = message;
+
+  const cropRegion: CropRegion = {
+    x: post.x,
+    y: post.y,
+    w: post.w,
+    h: post.h,
+    dpr: dpr,
+  };
+
+  const screenshot = await captureAndCrop(cropRegion);
+  if (screenshot) {
+    // Save with post ID and frame number
+    const filename = `${post.id}_frame${frameCounter}_${Date.now()}.jpg`;
+    await saveDebugScreenshot(screenshot.buffer, filename);
+    console.log(`[ScreenshotLoop] Saved frame ${frameCounter} for post ${post.id}`);
+    frameCounter++;
+
+    // Also store for debug saving via hotkey
+    lastScreenshotBuffer = screenshot.buffer;
+  }
+}
+
+// Start continuous screenshot capture for a post
+function startScreenshotLoop(message: DomSensorMessage): void {
+  if (!message.post) return;
+
+  // If already capturing for this post, do nothing
+  if (currentScreenshotPostId === message.post.id && screenshotLoop) {
+    return;
+  }
+
+  // Stop any existing loop
+  stopScreenshotLoop();
+
+  currentScreenshotPostId = message.post.id;
+  frameCounter = 0;
+
+  console.log(`[ScreenshotLoop] Starting for post ${message.post.id}`);
+
+  // Capture immediately
+  captureFrame(message);
+
+  // Then capture every SCREENSHOT_INTERVAL_MS
+  screenshotLoop = setInterval(() => {
+    // Check if we're still on the same post
+    if (currentPost?.post?.id === currentScreenshotPostId) {
+      captureFrame(currentPost);
+    } else {
+      // Post changed or disappeared, stop the loop
+      stopScreenshotLoop();
+    }
+  }, SCREENSHOT_INTERVAL_MS);
+}
+
+// ============ End Continuous Screenshot Loop ============
+
 // Debug: Save current screenshot to disk
 async function saveCurrentScreenshot(): Promise<void> {
   if (lastScreenshotBuffer) {
@@ -306,6 +389,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  stopScreenshotLoop();
   if (wsServer) {
     wsServer.close();
   }
