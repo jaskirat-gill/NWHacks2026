@@ -117,25 +117,39 @@ function connectApiWebSocket(postId: string): void {
 
 // Disconnect from FastAPI WebSocket
 function disconnectApiWebSocket(): void {
-  if (apiWebSocket) {
-    console.log(`[WebSocket] Disconnecting from FastAPI WebSocket for ${currentApiPostId}`);
-    apiWebSocket.removeAllListeners();
-    
-    // Only close if the WebSocket is OPEN or CONNECTING
-    // CLOSING (2) or CLOSED (3) states don't need to be closed
-    // Wrap in try-catch to handle edge cases where close() might fail
+  if (!apiWebSocket) {
+    return;
+  }
+  
+  const ws = apiWebSocket;
+  const postId = currentApiPostId;
+  
+  // Clear references immediately to prevent re-entry
+  apiWebSocket = null;
+  currentApiPostId = null;
+  
+  console.log(`[WebSocket] Disconnecting from FastAPI WebSocket for ${postId}`);
+  
+  // Use terminate() instead of close() - it's more aggressive and doesn't throw errors
+  // terminate() immediately destroys the connection without waiting for handshake
+  try {
+    // Remove all listeners first
     try {
-      const readyState = apiWebSocket.readyState;
-      if (readyState === WebSocket.OPEN || readyState === WebSocket.CONNECTING) {
-        apiWebSocket.close();
-      }
-    } catch (err) {
-      // Ignore errors when closing - the WebSocket is being cleaned up anyway
-      console.log(`[WebSocket] Error closing connection (this is usually safe to ignore):`, err);
+      ws.removeAllListeners();
+    } catch {
+      // Ignore errors removing listeners
     }
     
-    apiWebSocket = null;
-    currentApiPostId = null;
+    // Use terminate() which forcefully closes without throwing errors
+    // This is safer than close() when the connection might not be fully established
+    try {
+      ws.terminate();
+    } catch {
+      // terminate() shouldn't throw, but catch just in case
+    }
+  } catch (err) {
+    // Catch-all for any unexpected errors
+    console.log(`[WebSocket] Unexpected error during disconnect:`, err);
   }
 }
 
