@@ -94,8 +94,14 @@
   }
 
   // Find the post container ancestor for a media element
+  // We want a container that includes: video + engagement buttons + username/caption
   function findPostContainer(mediaEl) {
     let el = mediaEl.parentElement;
+    let bestContainer = null;
+    
+    // Target width: we want a container that's at least 50% of viewport width
+    // This ensures we capture the video + sidebar buttons
+    const targetMinWidth = window.innerWidth * 0.50;
     
     while (el && el !== document.body) {
       const rect = el.getBoundingClientRect();
@@ -109,7 +115,7 @@
       
       // Check if this is a valid post container (large enough)
       if (rect.width >= MIN_POST_SIZE && rect.height >= MIN_POST_SIZE) {
-        // Additional check: should contain the media element reasonably
+        // Should contain the media element
         const mediaRect = mediaEl.getBoundingClientRect();
         const containsMedia = (
           rect.left <= mediaRect.left &&
@@ -119,14 +125,26 @@
         );
         
         if (containsMedia) {
-          return el;
+          bestContainer = el;
+          
+          // If we found a container wide enough, use it
+          // Otherwise keep going up to find a wider one
+          if (rect.width >= targetMinWidth) {
+            log('Found wide container:', rect.width, 'x', rect.height, 'target was', targetMinWidth);
+            return el;
+          }
         }
       }
       
       el = el.parentElement;
     }
     
-    return null;
+    // Return the best container we found (even if narrower than target)
+    if (bestContainer) {
+      const rect = bestContainer.getBoundingClientRect();
+      log('Using best container found:', rect.width, 'x', rect.height);
+    }
+    return bestContainer;
   }
 
   // Generate unique ID for a post container

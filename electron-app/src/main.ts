@@ -1,7 +1,9 @@
-import { app, BrowserWindow, screen, ipcMain, globalShortcut } from 'electron';
+import { app, BrowserWindow, screen, globalShortcut } from 'electron';
 import * as path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DomSensorMessage, DetectionResult, OverlayState } from './types';
+import { captureAndCrop, saveDebugScreenshot, CropRegion } from './screenshot';
+import { detectAI } from './detectorStub';
 
 // State
 let overlayWindow: BrowserWindow | null = null;
@@ -10,6 +12,8 @@ let currentPost: DomSensorMessage | null = null;
 let detectionCache: Map<string, DetectionResult> = new Map();
 let lastDetectionTime = 0;
 let detectionInFlight = false;
+let lastScreenshotBuffer: Buffer | null = null;
+let showDebugBox = true;  // Toggle with Cmd+Shift+D
 
 const DETECTION_THROTTLE_MS = 2000;
 const CACHE_TTL_MS = 5000;
@@ -86,9 +90,12 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
       visible: false,
       x: 0,
       y: 0,
+      w: 0,
+      h: 0,
       label: '',
       score: 0,
       postId: null,
+      showDebugBox: false,
     });
     return;
   }
@@ -99,18 +106,21 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
   const cached = detectionCache.get(post.id);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     // Use cached result
-    updateOverlayWithDetection(post, cached, dpr);
+    updateOverlayWithDetection(post, cached);
     return;
   }
 
   // Show "Analyzing..." while waiting
   updateOverlay({
     visible: true,
-    x: post.x + post.w - 120,
-    y: post.y + 10,
+    x: post.x,
+    y: post.y,
+    w: post.w,
+    h: post.h,
     label: 'Analyzing...',
     score: 0,
     postId: post.id,
+    showDebugBox: showDebugBox,
   });
 
   // Trigger detection (throttled)
@@ -130,19 +140,42 @@ async function triggerDetection(message: DomSensorMessage): Promise<void> {
   lastDetectionTime = now;
 
   try {
-    // TODO: Chunk 3 will implement actual screenshot + detection
-    // For now, use a placeholder that simulates detection
-    const result = await simulateDetection(message.post.id);
+    const { post, dpr } = message;
+
+    // Capture and crop screenshot
+    const cropRegion: CropRegion = {
+      x: post.x,
+      y: post.y,
+      w: post.w,
+      h: post.h,
+      dpr: dpr,
+    };
+
+    console.log(`[Screenshot] Capturing region: x=${post.x}, y=${post.y}, w=${post.w}, h=${post.h}, dpr=${dpr}`);
+    const screenshot = await captureAndCrop(cropRegion);
+
+    if (!screenshot) {
+      console.error('Failed to capture screenshot');
+      detectionInFlight = false;
+      return;
+    }
+
+    // Store for debug saving
+    lastScreenshotBuffer = screenshot.buffer;
+    console.log(`[Screenshot] Captured ${screenshot.width}x${screenshot.height}, ${screenshot.buffer.length} bytes`);
+
+    // Run detection on the cropped image
+    const result = await detectAI(screenshot.buffer, post.id);
 
     // Cache the result
-    detectionCache.set(message.post.id, result);
+    detectionCache.set(post.id, result);
 
     // Clean old cache entries
     cleanCache();
 
     // Update overlay if this is still the current post
-    if (currentPost?.post?.id === message.post.id) {
-      updateOverlayWithDetection(message.post, result, message.dpr);
+    if (currentPost?.post?.id === post.id) {
+      updateOverlayWithDetection(post, result);
     }
   } catch (err) {
     console.error('Detection error:', err);
@@ -151,48 +184,21 @@ async function triggerDetection(message: DomSensorMessage): Promise<void> {
   }
 }
 
-// Placeholder detection - will be replaced in Chunk 3
-async function simulateDetection(postId: string): Promise<DetectionResult> {
-  // Simulate some processing time
-  await new Promise((resolve) => setTimeout(resolve, 500));
-
-  // Deterministic fake score based on post ID hash
-  let hash = 0;
-  for (let i = 0; i < postId.length; i++) {
-    hash = (hash * 31 + postId.charCodeAt(i)) >>> 0;
-  }
-  const score = (hash % 100) / 100;
-
-  let label: DetectionResult['label'];
-  if (score >= 0.75) {
-    label = 'Likely AI';
-  } else if (score >= 0.45) {
-    label = 'Unclear';
-  } else {
-    label = 'Likely Real';
-  }
-
-  return {
-    postId,
-    score,
-    label,
-    timestamp: Date.now(),
-  };
-}
-
 // Update overlay with detection result
 function updateOverlayWithDetection(
   post: { x: number; y: number; w: number; h: number },
-  result: DetectionResult,
-  _dpr: number
+  result: DetectionResult
 ): void {
   updateOverlay({
     visible: true,
-    x: post.x + post.w - 120,
-    y: post.y + 10,
+    x: post.x,
+    y: post.y,
+    w: post.w,
+    h: post.h,
     label: result.label,
     score: result.score,
     postId: result.postId,
+    showDebugBox: showDebugBox,
   });
 }
 
@@ -213,6 +219,58 @@ function cleanCache(): void {
   }
 }
 
+// Debug: Save current screenshot to disk
+async function saveCurrentScreenshot(): Promise<void> {
+  if (lastScreenshotBuffer) {
+    const filename = `debug_${currentPost?.post?.id || 'unknown'}_${Date.now()}.jpg`;
+    await saveDebugScreenshot(lastScreenshotBuffer, filename);
+  } else if (currentPost?.post) {
+    // No cached screenshot, capture a new one
+    const { post, dpr } = currentPost;
+    const cropRegion: CropRegion = {
+      x: post.x,
+      y: post.y,
+      w: post.w,
+      h: post.h,
+      dpr: dpr,
+    };
+    
+    const screenshot = await captureAndCrop(cropRegion);
+    if (screenshot) {
+      const filename = `debug_${post.id}_${Date.now()}.jpg`;
+      await saveDebugScreenshot(screenshot.buffer, filename);
+    }
+  } else {
+    console.log('No active post to screenshot');
+  }
+}
+
+// Toggle debug box visibility
+function toggleDebugBox(): void {
+  showDebugBox = !showDebugBox;
+  console.log(`Debug box: ${showDebugBox ? 'ON' : 'OFF'}`);
+  
+  // Re-send current overlay state with new debug setting
+  if (currentPost?.post) {
+    const cached = detectionCache.get(currentPost.post.id);
+    if (cached) {
+      updateOverlayWithDetection(currentPost.post, cached);
+    } else {
+      updateOverlay({
+        visible: true,
+        x: currentPost.post.x,
+        y: currentPost.post.y,
+        w: currentPost.post.w,
+        h: currentPost.post.h,
+        label: 'Analyzing...',
+        score: 0,
+        postId: currentPost.post.id,
+        showDebugBox: showDebugBox,
+      });
+    }
+  }
+}
+
 // App lifecycle
 app.whenReady().then(() => {
   createOverlayWindow();
@@ -220,9 +278,18 @@ app.whenReady().then(() => {
 
   // Register debug shortcut (Cmd+Shift+S to save screenshot)
   globalShortcut.register('CommandOrControl+Shift+S', () => {
-    console.log('Debug screenshot requested - will be implemented in Chunk 3');
-    // TODO: Chunk 3 will implement screenshot saving
+    console.log('Debug screenshot requested');
+    saveCurrentScreenshot();
   });
+
+  // Register debug box toggle (Cmd+Shift+D)
+  globalShortcut.register('CommandOrControl+Shift+D', () => {
+    toggleDebugBox();
+  });
+
+  console.log('Shortcuts registered:');
+  console.log('  Cmd+Shift+S: Save debug screenshot');
+  console.log('  Cmd+Shift+D: Toggle debug bounding box');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
