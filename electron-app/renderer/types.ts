@@ -9,3 +9,15 @@ export interface OverlayState {
   postId: string | null;
   showDebugBox: boolean;  // whether to show the debug bounding box
 }
+
+export interface ThreatEntry {
+  id: number;
+  timestamp: string;
+  riskLevel: "HIGH" | "MEDIUM" | "LOW";
+  score: number;
+  description: string;
+  screenshot: string;
+  coordinates: { x: number; y: number };
+  indicators: string[];
+  threatType: string;
+}
