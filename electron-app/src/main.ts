@@ -1,10 +1,13 @@
 import { app, BrowserWindow, screen, globalShortcut, ipcMain } from 'electron';
 import * as path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { DomSensorMessage, DetectionResult, OverlayState } from './types';
+import { DomSensorMessage, DetectionResult, OverlayState, EducationData } from './types';
 import { captureAndCrop, saveDebugScreenshot, CropRegion } from './screenshot';
 import { startFileWatcher, stopFileWatcher } from './fileWatcher';
 import { detectAI } from './detectorStub';
+
+// API base URL
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
 // State
 let overlayWindow: BrowserWindow | null = null;
@@ -408,6 +411,45 @@ function toggleDebugBox(): void {
   }
 }
 
+// Extract base post ID (just "post_X" part)
+function extractBasePostId(fullPostId: string): string {
+  const match = fullPostId.match(/^(post_\d+)/);
+  if (match) {
+    return match[1];
+  }
+  return fullPostId;
+}
+
+// Fetch educational content from the API
+async function fetchEducation(postId: string): Promise<EducationData> {
+  const basePostId = extractBasePostId(postId);
+  const apiUrl = `${API_BASE_URL}/educate/${basePostId}`;
+  
+  console.log(`[Education] Fetching: ${apiUrl}`);
+  
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    const data = await response.json() as EducationData;
+    console.log(`[Education] Received ${data.frames.length} frames and explanation`);
+    
+    return data;
+  } catch (error: any) {
+    console.error(`[Education] Error fetching education for ${basePostId}:`, error);
+    throw error;
+  }
+}
+
 // App lifecycle
 app.whenReady().then(() => {
   createOverlayWindow();
@@ -418,6 +460,18 @@ app.whenReady().then(() => {
   ipcMain.on('set-ignore-mouse-events', (_event, ignore: boolean) => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
       overlayWindow.setIgnoreMouseEvents(ignore, { forward: true });
+    }
+  });
+
+  // Handle education request from renderer
+  ipcMain.handle('request-education', async (_event, postId: string) => {
+    console.log(`[IPC] Education requested for post: ${postId}`);
+    try {
+      const educationData = await fetchEducation(postId);
+      return educationData;
+    } catch (error: any) {
+      console.error(`[IPC] Education request failed:`, error);
+      throw error;
     }
   });
 

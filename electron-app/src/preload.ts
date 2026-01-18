@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { OverlayState } from './types';
+import { OverlayState, EducationData } from './types';
 
 // Expose IPC to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -10,5 +10,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   setIgnoreMouseEvents: (ignore: boolean) => {
     ipcRenderer.send('set-ignore-mouse-events', ignore);
+  },
+  requestEducation: (postId: string): Promise<EducationData> => {
+    return ipcRenderer.invoke('request-education', postId);
   },
 });
