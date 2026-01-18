@@ -20,4 +20,5 @@ export interface ThreatEntry {
   coordinates: { x: number; y: number };
   indicators: string[];
   threatType: string;
+  is_ai: boolean; // Track if content is detected as AI-generated
 }
