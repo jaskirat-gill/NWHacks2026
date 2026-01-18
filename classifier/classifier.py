@@ -1,73 +1,73 @@
 import torch
-from transformers import AutoImageProcessor, SiglipForImageClassification
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 from PIL import Image
 import io
 from typing import Dict, Any
 
-MODEL_ID = "Ateeqq/ai-vs-human-image-detector"
-
+MODEL_ID = "Organika/sdxl-detector"
 
 class Classifier:
-    """Image classifier for AI vs Human detection using Hugging Face model."""
+    """SDXL-focused AI image detector."""
     
     def __init__(self, device=None):
-        """
-        Initialize the classifier and load the model.
-        
-        Args:
-            device: torch device (cuda/cpu). If None, auto-detects.
-        """
         self.device = device or (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
-        print(f"Loading model '{MODEL_ID}' to device: {self.device}")
+        print(f"Loading {MODEL_ID} on {self.device}")
         
         self.processor = AutoImageProcessor.from_pretrained(MODEL_ID)
-        self.model = SiglipForImageClassification.from_pretrained(MODEL_ID)
+        self.model = AutoModelForImageClassification.from_pretrained(MODEL_ID)
         self.model.to(self.device)
         self.model.eval()
         
-        print(f"Model loaded successfully on {self.device}")
+        print(f"Model loaded successfully")
+        print(f"Labels: {self.model.config.id2label}")
     
     def predict(self, image_bytes: bytes) -> Dict[str, Any]:
         """
-        Classify an image from bytes.
+        Classify an image as AI-generated or real.
         
         Args:
-            image_bytes: Raw image bytes (PNG, JPEG, etc.)
+            image_bytes: Raw image bytes
             
         Returns:
-            Dictionary with:
-                - label: "ai" or "hum"
-                - confidence: float (0-1)
-                - scores: dict with per-class probabilities
+            Dictionary with label, confidence, and full score distribution
         """
-        # Load and convert image to RGB
+        # Load and convert image
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         
-        # Preprocess image
+        # Preprocess
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         
-        # Run inference
+        # Inference
         with torch.no_grad():
             outputs = self.model(**inputs)
             logits = outputs.logits
+            probs = torch.softmax(logits, dim=-1)[0]
         
-        # Convert logits to probabilities
-        probs = torch.softmax(logits, dim=-1)[0]
+        # Get prediction
+        predicted_idx = logits.argmax(-1).item()
+        label = self.model.config.id2label[predicted_idx]
+        confidence = probs[predicted_idx].item()
         
-        # Get predicted class
-        class_idx = torch.argmax(probs).item()
-        label = self.model.config.id2label[class_idx]
-        confidence = probs[class_idx].item()
-        
-        # Get full distribution
+        # Full distribution
         distribution = {
-            self.model.config.id2label[i]: float(probs[i].item()) 
+            self.model.config.id2label[i]: float(probs[i].item())
             for i in range(len(probs))
         }
         
         return {
             "label": label,
-            "confidence": float(confidence),
+            "confidence": confidence,
             "scores": distribution
         }
 
+# Usage example
+if __name__ == "__main__":
+    classifier = Classifier()
+    
+    # Test with an image
+    with open("test_image.jpg", "rb") as f:
+        result = classifier.predict(f.read())
+    
+    print(f"Prediction: {result['label']}")
+    print(f"Confidence: {result['confidence']:.2%}")
+    print(f"All scores: {result['scores']}")

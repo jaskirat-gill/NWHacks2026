@@ -4,4 +4,9 @@ python-multipart
 transformers
 torch
 Pillow
+opencv-python
+pytesseract
+numpy
+google-genai
+python-dotenv
 
