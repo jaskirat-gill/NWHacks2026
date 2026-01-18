@@ -4,8 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from detector import AIImageDetector
 from models import DetectionResult
 from gemini_analyzer import GeminiAnalyzer
+from lesson_generator import LessonGenerator
 import logging
-from typing import Dict, List, Tuple
+import os
+import glob
+import base64
+from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 import os
 
@@ -36,6 +40,26 @@ app.add_middleware(
 logger.info("Initializing AI Image Detector...")
 detector = AIImageDetector()
 logger.info("AI Image Detector ready")
+
+# Initialize LessonGenerator for educational content (lazy initialization)
+lesson_generator: Optional[LessonGenerator] = None
+
+def get_lesson_generator() -> LessonGenerator:
+    """Get or initialize the LessonGenerator with Gemini API."""
+    global lesson_generator
+    if lesson_generator is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="GEMINI_API_KEY environment variable not set"
+            )
+        lesson_generator = LessonGenerator(api_key=api_key)
+        logger.info("LessonGenerator initialized")
+    return lesson_generator
+
+# Screenshots directory (relative to classifier folder)
+SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'screenshots')
 
 # In-memory storage for analysis results
 # Key: analysis_id (string), Value: Tuple[DetectionResult, bytes] (result and original image bytes)
@@ -175,64 +199,101 @@ async def get_analysis(analysis_id: str = Path(..., description="Unique identifi
     return JSONResponse(content=detection_result.to_dict())
 
 
-@app.get("/analyze/{analysis_id}/explain")
-async def get_analysis_with_explanation(analysis_id: str = Path(..., description="Unique identifier for the analysis")):
+@app.get("/educate/{analysis_id}")
+async def get_education(analysis_id: str = Path(..., description="Unique identifier for the analysis")):
     """
-    Retrieve a stored analysis result by ID, with Gemini explanation if the image was classified as AI.
+    Generate educational content for a stored analysis using Gemini API.
     
-    This endpoint extends the GET /analyze/{analysis_id} endpoint by also calling Gemini
-    to explain why something was classified as AI (if is_ai is True).
+    Returns frames from the video and an AI-generated explanation of why
+    the content was flagged (or not flagged) as AI-generated.
     
     Args:
-        analysis_id: Unique identifier for the analysis (path parameter)
+        analysis_id: Unique identifier for the analysis (e.g., "post_1")
     
     Returns:
-        JSON response with DetectionResult plus optional Gemini explanation:
+        JSON response with:
         {
-            ...DetectionResult fields...,
-            "gemini_explanation": str | None  # Only present if is_ai is True
+            "frames": List[str],       # base64 encoded JPEG images (up to 5)
+            "explanation": str,        # Gemini-generated educational text
+            "indicators": List[str],   # Key visual indicators found
+            "detection_summary": {     # Summary of original detection
+                "is_ai": bool,
+                "confidence": float,
+                "severity": str
+            }
         }
     
     Raises:
         404: If the analysis_id doesn't exist
-        500: If Gemini explanation fails (but still returns DetectionResult)
+        500: If Gemini API fails
     """
+    # Check if analysis exists
     if analysis_id not in analysis_results:
         raise HTTPException(
             status_code=404,
             detail=f"Analysis with ID '{analysis_id}' not found"
         )
     
-    detection_result, image_bytes = analysis_results[analysis_id]
+    detection_result, _ = analysis_results[analysis_id]
     
-    logger.info(f"Retrieved analysis with ID {analysis_id} for explanation")
-    
-    # Build base response with DetectionResult
-    response_dict = detection_result.to_dict()
-    
-    # If the image was classified as AI, get Gemini explanation
-    if detection_result.is_ai:
-        try:
-            # Initialize Gemini analyzer if needed
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                logger.warning("GEMINI_API_KEY not set, skipping Gemini explanation")
-                response_dict["gemini_explanation"] = None
-            else:
-                gemini_analyzer = GeminiAnalyzer(api_key=api_key)
-                explanation = gemini_analyzer.explain_why_ai(image_bytes)
-                response_dict["gemini_explanation"] = explanation
-                logger.info(f"Gemini explanation generated for analysis {analysis_id}")
-        except Exception as e:
-            logger.error(f"Failed to get Gemini explanation: {str(e)}", exc_info=True)
-            # Don't fail the request, just omit the explanation
-            response_dict["gemini_explanation"] = None
-            response_dict["gemini_explanation_error"] = str(e)
-    else:
-        # Not AI, so no explanation needed
-        response_dict["gemini_explanation"] = None
-    
-    return JSONResponse(content=response_dict)
+    try:
+        # Find frames for this post in screenshots directory
+        frame_pattern = os.path.join(SCREENSHOTS_DIR, f"{analysis_id}_*.jpg")
+        frame_files = sorted(glob.glob(frame_pattern))
+        
+        logger.info(f"Found {len(frame_files)} frames for {analysis_id}")
+        
+        # Select up to 5 representative frames (evenly spaced)
+        max_frames = 5
+        if len(frame_files) > max_frames:
+            # Select evenly spaced frames
+            step = len(frame_files) // max_frames
+            frame_files = [frame_files[i * step] for i in range(max_frames)]
+        
+        # Read frame bytes
+        frame_bytes_list: List[bytes] = []
+        frames_base64: List[str] = []
+        
+        for frame_path in frame_files:
+            try:
+                with open(frame_path, 'rb') as f:
+                    frame_data = f.read()
+                    frame_bytes_list.append(frame_data)
+                    frames_base64.append(base64.b64encode(frame_data).decode('utf-8'))
+            except Exception as e:
+                logger.warning(f"Failed to read frame {frame_path}: {str(e)}")
+                continue
+        
+        logger.info(f"Loaded {len(frame_bytes_list)} frames for Gemini analysis")
+        
+        # Get LessonGenerator and generate educational content
+        generator = get_lesson_generator()
+        education = await generator.generate_education(
+            detection_result=detection_result,
+            image_bytes_list=frame_bytes_list if frame_bytes_list else None
+        )
+        
+        logger.info(f"Generated educational content for {analysis_id}")
+        
+        return JSONResponse(content={
+            "frames": frames_base64,
+            "explanation": education.explanation,
+            "indicators": education.indicators,
+            "detection_summary": {
+                "is_ai": detection_result.is_ai,
+                "confidence": detection_result.confidence,
+                "severity": detection_result.severity
+            }
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating education for {analysis_id}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate educational content: {str(e)}"
+        )
 
 
 if __name__ == "__main__":

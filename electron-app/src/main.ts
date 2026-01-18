@@ -2,10 +2,13 @@ import { app, BrowserWindow, screen, globalShortcut, ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
-import { DomSensorMessage, DetectionResult, OverlayState } from './types';
+import { DomSensorMessage, DetectionResult, OverlayState, EducationData } from './types';
 import { captureAndCrop, saveDebugScreenshot, CropRegion } from './screenshot';
 import { startFileWatcher, stopFileWatcher } from './fileWatcher';
 import { detectAI } from './detectorStub';
+
+// API base URL
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
 // State
 let overlayWindow: BrowserWindow | null = null;
@@ -28,7 +31,7 @@ let frameCounter = 0;
 const DETECTION_THROTTLE_MS = 2000;
 const CACHE_TTL_MS = 5000;
 const SCREENSHOT_INTERVAL_MS = 1000; // Capture every 1 second
-const SCREENSHOT_START_DELAY_MS = 800; // Wait for scroll to settle before capturing
+const SCREENSHOT_START_DELAY_MS = 200; // Minimal delay for scroll settle (was 800ms)
 
 // Create transparent overlay window
 function createOverlayWindow(): void {
@@ -442,82 +445,43 @@ function toggleDebugBox(): void {
   }
 }
 
-// Toggle detection enabled state
-function toggleDetection(): void {
-  detectionEnabled = !detectionEnabled;
-  console.log(`Detection ${detectionEnabled ? 'ENABLED' : 'DISABLED'}`);
-  
-  // If disabling, stop any active screenshot loops
-  if (!detectionEnabled) {
-    stopScreenshotLoop();
+// Extract base post ID (just "post_X" part)
+function extractBasePostId(fullPostId: string): string {
+  const match = fullPostId.match(/^(post_\d+)/);
+  if (match) {
+    return match[1];
   }
-  
-  // Notify control window if it exists
-  if (controlWindow && !controlWindow.isDestroyed()) {
-    controlWindow.webContents.send('detection-state-changed', { enabled: detectionEnabled });
-  }
+  return fullPostId;
 }
 
-// Extract post ID from filename
-function extractPostId(fileName: string): string {
-  const withoutExt = fileName.replace(/\.(jpg|jpeg)$/i, '');
-  const postIdMatch = withoutExt.match(/^(post_\d+)/);
-  if (postIdMatch) {
-    return postIdMatch[1];
-  }
-  return withoutExt;
-}
-
-// Get screenshots grouped by post ID
-async function getScreenshots(): Promise<{ [postId: string]: string[] }> {
-  const screenshotsDir = path.resolve(__dirname, '..', '..', 'screenshots');
-  const grouped: { [postId: string]: string[] } = {};
-
+// Fetch educational content from the API
+async function fetchEducation(postId: string): Promise<EducationData> {
+  const basePostId = extractBasePostId(postId);
+  const apiUrl = `${API_BASE_URL}/educate/${basePostId}`;
+  
+  console.log(`[Education] Fetching: ${apiUrl}`);
+  
   try {
-    if (!fs.existsSync(screenshotsDir)) {
-      return grouped;
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
-
-    const files = await fs.promises.readdir(screenshotsDir);
-    const jpgFiles = files.filter(f => f.toLowerCase().endsWith('.jpg') || f.toLowerCase().endsWith('.jpeg'));
-
-    for (const fileName of jpgFiles) {
-      const postId = extractPostId(fileName);
-      if (!grouped[postId]) {
-        grouped[postId] = [];
-      }
-      grouped[postId].push(fileName);
-    }
-
-    // Sort filenames within each post group
-    for (const postId in grouped) {
-      grouped[postId].sort();
-    }
-  } catch (error) {
-    console.error('Error reading screenshots directory:', error);
+    
+    const data = await response.json() as EducationData;
+    console.log(`[Education] Received ${data.frames.length} frames and explanation`);
+    
+    return data;
+  } catch (error: any) {
+    console.error(`[Education] Error fetching education for ${basePostId}:`, error);
+    throw error;
   }
-
-  return grouped;
-}
-
-// Register IPC handlers
-function registerIpcHandlers(): void {
-  ipcMain.handle('toggle-detection', () => {
-    toggleDetection();
-    return { enabled: detectionEnabled };
-  });
-
-  ipcMain.handle('get-detection-state', () => {
-    return { enabled: detectionEnabled };
-  });
-
-  ipcMain.handle('get-screenshots', async () => {
-    return await getScreenshots();
-  });
-
-  ipcMain.handle('get-screenshots-dir', () => {
-    return path.resolve(__dirname, '..', '..', 'screenshots');
-  });
 }
 
 // App lifecycle
@@ -526,12 +490,23 @@ app.whenReady().then(() => {
   createControlWindow();
   startWebSocketServer();
   startFileWatcher(); // Start watching screenshots folder
-  registerIpcHandlers();
 
   // Handle mouse events toggle from renderer (for clickable badge)
   ipcMain.on('set-ignore-mouse-events', (_event, ignore: boolean) => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
       overlayWindow.setIgnoreMouseEvents(ignore, { forward: true });
+    }
+  });
+
+  // Handle education request from renderer
+  ipcMain.handle('request-education', async (_event, postId: string) => {
+    console.log(`[IPC] Education requested for post: ${postId}`);
+    try {
+      const educationData = await fetchEducation(postId);
+      return educationData;
+    } catch (error: any) {
+      console.error(`[IPC] Education request failed:`, error);
+      throw error;
     }
   });
 

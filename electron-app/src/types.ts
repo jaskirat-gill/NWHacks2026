@@ -35,3 +35,15 @@ export interface OverlayState {
   postId: string | null;
   showDebugBox: boolean;  // whether to show the debug bounding box
 }
+
+// Educational content returned from the Gemini API
+export interface EducationData {
+  frames: string[];           // base64 encoded JPEG images
+  explanation: string;        // Gemini-generated educational text
+  indicators: string[];       // Key visual indicators found
+  detection_summary: {
+    is_ai: boolean;
+    confidence: number;
+    severity: string;
+  };
+}
