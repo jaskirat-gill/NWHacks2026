@@ -1,5 +1,6 @@
-import { app, BrowserWindow, screen, globalShortcut } from 'electron';
+import { app, BrowserWindow, screen, globalShortcut, ipcMain } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DomSensorMessage, DetectionResult, OverlayState } from './types';
 import { captureAndCrop, saveDebugScreenshot, CropRegion } from './screenshot';
@@ -8,6 +9,7 @@ import { detectAI } from './detectorStub';
 
 // State
 let overlayWindow: BrowserWindow | null = null;
+let controlWindow: BrowserWindow | null = null;
 let wsServer: WebSocketServer | null = null;
 let currentPost: DomSensorMessage | null = null;
 let detectionCache: Map<string, DetectionResult> = new Map();
@@ -15,6 +17,7 @@ let lastDetectionTime = 0;
 let detectionInFlight = false;
 let lastScreenshotBuffer: Buffer | null = null;
 let showDebugBox = true;  // Toggle with Cmd+Shift+D
+let detectionEnabled = true;  // Detection enabled/disabled state
 
 // Continuous screenshot loop state
 let screenshotLoop: NodeJS.Timeout | null = null;
@@ -58,6 +61,36 @@ function createOverlayWindow(): void {
 
   overlayWindow.on('closed', () => {
     overlayWindow = null;
+  });
+}
+
+// Create control window
+function createControlWindow(): void {
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.focus();
+    return;
+  }
+
+  controlWindow = new BrowserWindow({
+    width: 600,
+    height: 800,
+    frame: true,
+    resizable: true,
+    alwaysOnTop: false,
+    skipTaskbar: false,
+    title: 'Reality Check - Control Panel',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  // Load control window HTML
+  controlWindow.loadFile(path.join(__dirname, 'renderer', 'control.html'));
+
+  controlWindow.on('closed', () => {
+    controlWindow = null;
   });
 }
 
@@ -112,8 +145,10 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
 
   const { post, dpr } = message;
 
-  // Start continuous screenshot capture for this post
-  startScreenshotLoop(message);
+  // Start continuous screenshot capture for this post (only if detection is enabled)
+  if (detectionEnabled) {
+    startScreenshotLoop(message);
+  }
 
   // Check cache for existing detection
   const cached = detectionCache.get(post.id);
@@ -297,7 +332,7 @@ async function captureFrame(message: DomSensorMessage): Promise<void> {
 
 // Start continuous screenshot capture for a post (with delay for scroll to settle)
 function startScreenshotLoop(message: DomSensorMessage): void {
-  if (!message.post) return;
+  if (!message.post || !detectionEnabled) return;
 
   // If already capturing or waiting to capture for this post, do nothing
   if (currentScreenshotPostId === message.post.id && (screenshotLoop || screenshotStartDelay)) {
@@ -395,11 +430,91 @@ function toggleDebugBox(): void {
   }
 }
 
+// Toggle detection enabled state
+function toggleDetection(): void {
+  detectionEnabled = !detectionEnabled;
+  console.log(`Detection ${detectionEnabled ? 'ENABLED' : 'DISABLED'}`);
+  
+  // If disabling, stop any active screenshot loops
+  if (!detectionEnabled) {
+    stopScreenshotLoop();
+  }
+  
+  // Notify control window if it exists
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.webContents.send('detection-state-changed', { enabled: detectionEnabled });
+  }
+}
+
+// Extract post ID from filename
+function extractPostId(fileName: string): string {
+  const withoutExt = fileName.replace(/\.(jpg|jpeg)$/i, '');
+  const postIdMatch = withoutExt.match(/^(post_\d+)/);
+  if (postIdMatch) {
+    return postIdMatch[1];
+  }
+  return withoutExt;
+}
+
+// Get screenshots grouped by post ID
+async function getScreenshots(): Promise<{ [postId: string]: string[] }> {
+  const screenshotsDir = path.resolve(__dirname, '..', '..', 'screenshots');
+  const grouped: { [postId: string]: string[] } = {};
+
+  try {
+    if (!fs.existsSync(screenshotsDir)) {
+      return grouped;
+    }
+
+    const files = await fs.promises.readdir(screenshotsDir);
+    const jpgFiles = files.filter(f => f.toLowerCase().endsWith('.jpg') || f.toLowerCase().endsWith('.jpeg'));
+
+    for (const fileName of jpgFiles) {
+      const postId = extractPostId(fileName);
+      if (!grouped[postId]) {
+        grouped[postId] = [];
+      }
+      grouped[postId].push(fileName);
+    }
+
+    // Sort filenames within each post group
+    for (const postId in grouped) {
+      grouped[postId].sort();
+    }
+  } catch (error) {
+    console.error('Error reading screenshots directory:', error);
+  }
+
+  return grouped;
+}
+
+// Register IPC handlers
+function registerIpcHandlers(): void {
+  ipcMain.handle('toggle-detection', () => {
+    toggleDetection();
+    return { enabled: detectionEnabled };
+  });
+
+  ipcMain.handle('get-detection-state', () => {
+    return { enabled: detectionEnabled };
+  });
+
+  ipcMain.handle('get-screenshots', async () => {
+    return await getScreenshots();
+  });
+
+  ipcMain.handle('get-screenshots-dir', () => {
+    return path.resolve(__dirname, '..', '..', 'screenshots');
+  });
+}
+
 // App lifecycle
 app.whenReady().then(() => {
   createOverlayWindow();
+  createControlWindow();
   startWebSocketServer();
   startFileWatcher(); // Start watching screenshots folder
+  registerIpcHandlers();
 
   // Register debug shortcut (Cmd+Shift+S to save screenshot)
   globalShortcut.register('CommandOrControl+Shift+S', () => {
@@ -419,6 +534,7 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createOverlayWindow();
+      createControlWindow();
     }
   });
 });

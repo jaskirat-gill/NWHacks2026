@@ -14,3 +14,13 @@ html, body, #root {
   background: transparent;
   overflow: hidden;
 }
+
+/* Scrollbar styles for history view */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

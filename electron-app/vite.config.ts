@@ -9,6 +9,12 @@ export default defineConfig({
   build: {
     outDir: '../dist/renderer',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'renderer/index.html'),
+        control: path.resolve(__dirname, 'renderer/control.html'),
+      },
+    },
   },
   resolve: {
     alias: {
