@@ -17,12 +17,14 @@ let showDebugBox = true;  // Toggle with Cmd+Shift+D
 
 // Continuous screenshot loop state
 let screenshotLoop: NodeJS.Timeout | null = null;
+let screenshotStartDelay: NodeJS.Timeout | null = null;
 let currentScreenshotPostId: string | null = null;
 let frameCounter = 0;
 
 const DETECTION_THROTTLE_MS = 2000;
 const CACHE_TTL_MS = 5000;
 const SCREENSHOT_INTERVAL_MS = 1000; // Capture every 1 second
+const SCREENSHOT_START_DELAY_MS = 800; // Wait for scroll to settle before capturing
 
 // Create transparent overlay window
 function createOverlayWindow(): void {
@@ -231,8 +233,12 @@ function cleanCache(): void {
 
 // ============ Continuous Screenshot Loop ============
 
-// Stop the screenshot loop
+// Stop the screenshot loop and any pending start delay
 function stopScreenshotLoop(): void {
+  if (screenshotStartDelay) {
+    clearTimeout(screenshotStartDelay);
+    screenshotStartDelay = null;
+  }
   if (screenshotLoop) {
     clearInterval(screenshotLoop);
     screenshotLoop = null;
@@ -268,12 +274,12 @@ async function captureFrame(message: DomSensorMessage): Promise<void> {
   }
 }
 
-// Start continuous screenshot capture for a post
+// Start continuous screenshot capture for a post (with delay for scroll to settle)
 function startScreenshotLoop(message: DomSensorMessage): void {
   if (!message.post) return;
 
-  // If already capturing for this post, do nothing
-  if (currentScreenshotPostId === message.post.id && screenshotLoop) {
+  // If already capturing or waiting to capture for this post, do nothing
+  if (currentScreenshotPostId === message.post.id && (screenshotLoop || screenshotStartDelay)) {
     return;
   }
 
@@ -283,21 +289,35 @@ function startScreenshotLoop(message: DomSensorMessage): void {
   currentScreenshotPostId = message.post.id;
   frameCounter = 0;
 
-  console.log(`[ScreenshotLoop] Starting for post ${message.post.id}`);
+  console.log(`[ScreenshotLoop] New post ${message.post.id} - waiting ${SCREENSHOT_START_DELAY_MS}ms for scroll to settle...`);
 
-  // Capture immediately
-  captureFrame(message);
-
-  // Then capture every SCREENSHOT_INTERVAL_MS
-  screenshotLoop = setInterval(() => {
-    // Check if we're still on the same post
-    if (currentPost?.post?.id === currentScreenshotPostId) {
-      captureFrame(currentPost);
-    } else {
-      // Post changed or disappeared, stop the loop
+  // Wait for scroll to settle before starting capture
+  screenshotStartDelay = setTimeout(() => {
+    screenshotStartDelay = null;
+    
+    // Verify we're still on the same post after the delay
+    if (currentPost?.post?.id !== currentScreenshotPostId) {
+      console.log(`[ScreenshotLoop] Post changed during delay, cancelling`);
       stopScreenshotLoop();
+      return;
     }
-  }, SCREENSHOT_INTERVAL_MS);
+
+    console.log(`[ScreenshotLoop] Starting capture for post ${currentScreenshotPostId}`);
+
+    // Capture first frame
+    captureFrame(currentPost);
+
+    // Then capture every SCREENSHOT_INTERVAL_MS
+    screenshotLoop = setInterval(() => {
+      // Check if we're still on the same post
+      if (currentPost?.post?.id === currentScreenshotPostId) {
+        captureFrame(currentPost);
+      } else {
+        // Post changed or disappeared, stop the loop
+        stopScreenshotLoop();
+      }
+    }, SCREENSHOT_INTERVAL_MS);
+  }, SCREENSHOT_START_DELAY_MS);
 }
 
 // ============ End Continuous Screenshot Loop ============
