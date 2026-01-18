@@ -316,16 +316,82 @@
     if (activePost) {
       const { container, data, rect } = activePost;
       
+      // Try to find the actual media content element within the container
+      // Priority: DivMediaCardOverlay (perfect bounds) > video > img
+      let contentRect = null;
+      
+      // Safety padding to ensure we don't cut off edges
+      const PADDING = 20;
+      
+      // Look for TikTok's DivMediaCardOverlay which has perfect bounds
+      // TikTok uses class names like "css-xxx--DivMediaCardOverlay"
+      let mediaOverlay = container.querySelector('[class*="DivMediaCardOverlay"]');
+      
+      // If not found with querySelector, try finding it manually
+      if (!mediaOverlay) {
+        const allDivs = container.querySelectorAll('div');
+        for (const div of allDivs) {
+          if (div.className && div.className.includes && div.className.includes('MediaCard')) {
+            mediaOverlay = div;
+            log('Found MediaCard element via manual search');
+            break;
+          }
+        }
+      }
+      const video = container.querySelector('video');
+      const img = container.querySelector('img[src*="tiktok"]');
+      
+      if (mediaOverlay) {
+        const overlayRect = mediaOverlay.getBoundingClientRect();
+        if (overlayRect.width >= MIN_IMG_SIZE && overlayRect.height >= MIN_IMG_SIZE) {
+          contentRect = overlayRect;
+          log('Using DivMediaCardOverlay bounds:', overlayRect.width, 'x', overlayRect.height);
+        }
+      }
+      
+      if (!contentRect && video) {
+        const videoRect = video.getBoundingClientRect();
+        if (videoRect.width >= MIN_IMG_SIZE && videoRect.height >= MIN_IMG_SIZE) {
+          contentRect = videoRect;
+          log('Using video bounds:', videoRect.width, 'x', videoRect.height);
+        }
+      }
+      
+      if (!contentRect && img) {
+        const imgRect = img.getBoundingClientRect();
+        if (imgRect.width >= MIN_IMG_SIZE && imgRect.height >= MIN_IMG_SIZE) {
+          contentRect = imgRect;
+          log('Using image bounds:', imgRect.width, 'x', imgRect.height);
+        }
+      }
+      
+      // Fall back to container rect if nothing found
+      if (!contentRect) {
+        contentRect = rect;
+        log('Using container bounds (fallback)');
+      }
+      
+      // Apply offset correction for capture alignment
+      const LEFT_OFFSET = 76;  // Shift capture region left
+      const TOP_CROP = 30;     // Crop this many pixels from the top
+      
+      contentRect = {
+        left: contentRect.left - LEFT_OFFSET,
+        top: contentRect.top + TOP_CROP,
+        width: contentRect.width,
+        height: contentRect.height - TOP_CROP,  // Reduce height to keep bottom in place
+      };
+      
       // Convert to screen coordinates
-      const screenX = rect.left + window.screenX;
-      const screenY = rect.top + window.screenY;
+      const screenX = contentRect.left + window.screenX;
+      const screenY = contentRect.top + window.screenY;
       
       message.post = {
         id: data.id,
         x: screenX,
         y: screenY,
-        w: rect.width,
-        h: rect.height,
+        w: contentRect.width,
+        h: contentRect.height,
         visibility: data.visibility,
       };
       
