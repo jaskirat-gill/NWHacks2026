@@ -4,6 +4,25 @@ import { DetectionResult } from './types';
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
 /**
+ * Extract base post ID (just "post_X" part)
+ * DOM sensor creates IDs like "post_1_1768711195270" (with timestamp)
+ * File watcher extracts "post_1" to use as the API key
+ * We need to match that extraction to query the correct result
+ * 
+ * @param fullPostId - Full post ID from DOM sensor (e.g., "post_1_1768711195270")
+ * @returns Base post ID (e.g., "post_1")
+ */
+function extractBasePostId(fullPostId: string): string {
+  // Match "post_" followed by digits
+  const match = fullPostId.match(/^(post_\d+)/);
+  if (match) {
+    return match[1];
+  }
+  // Fallback: return as-is
+  return fullPostId;
+}
+
+/**
  * Map API response to a label
  * @param isAI - Whether the image is detected as AI-generated
  * @param confidence - Confidence score between 0 and 1
@@ -21,11 +40,15 @@ function mapToLabel(isAI: boolean, confidence: number): DetectionResult['label']
  * Fetch detection result from the classifier API
  * 
  * @param _imageBuffer - JPEG image buffer (unused, fileWatcher sends images separately)
- * @param postId - Unique identifier for the post
+ * @param postId - Unique identifier for the post (full ID from DOM sensor)
  * @returns Detection result with score and label
  */
 export async function detectAI(_imageBuffer: Buffer, postId: string): Promise<DetectionResult> {
-  const apiUrl = `${API_BASE_URL}/analyze/${postId}`;
+  // Extract base post ID to match what fileWatcher sends to the API
+  const basePostId = extractBasePostId(postId);
+  const apiUrl = `${API_BASE_URL}/analyze/${basePostId}`;
+  
+  console.log(`[Detector] Fetching: ${apiUrl} (full ID: ${postId})`);
 
   try {
     const response = await fetch(apiUrl, {
@@ -37,7 +60,7 @@ export async function detectAI(_imageBuffer: Buffer, postId: string): Promise<De
 
     // Handle 404 - analysis not yet complete
     if (response.status === 404) {
-      console.log(`[Detector] Post ${postId}: Analysis not ready yet`);
+      console.log(`[Detector] Post ${basePostId} (from ${postId}): Analysis not ready yet`);
       return {
         postId,
         score: 0,
@@ -56,7 +79,7 @@ export async function detectAI(_imageBuffer: Buffer, postId: string): Promise<De
     // API returns: { is_ai: bool, confidence: float, severity: string, reasons: [], ... }
     const label = mapToLabel(data.is_ai, data.confidence);
     
-    console.log(`[Detector] Post ${postId}: is_ai=${data.is_ai}, confidence=${(data.confidence * 100).toFixed(1)}%, severity=${data.severity}, label=${label}`);
+    console.log(`[Detector] Post ${basePostId}: is_ai=${data.is_ai}, confidence=${(data.confidence * 100).toFixed(1)}%, severity=${data.severity}, label=${label}`);
 
     return {
       postId,
@@ -69,7 +92,7 @@ export async function detectAI(_imageBuffer: Buffer, postId: string): Promise<De
     if (error?.code === 'ECONNREFUSED' || error?.cause?.code === 'ECONNREFUSED') {
       console.warn(`[Detector] API server not available at ${API_BASE_URL}. Is the classifier server running?`);
     } else {
-      console.error(`[Detector] Error fetching result for post ${postId}:`, error);
+      console.error(`[Detector] Error fetching result for post ${basePostId}:`, error);
     }
     
     // Return pending state on error

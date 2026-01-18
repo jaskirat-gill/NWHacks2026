@@ -60,8 +60,8 @@ class AIImageDetector:
         """
         Complete detection pipeline for TikTok screenshot analysis.
         
-        Handles both single frame and multi-frame (10 frames) processing.
-        For 10 frames: processes via our pipeline, gets Gemini analysis, and combines (30% us, 70% Gemini).
+        Handles both single frame and multi-frame (5 frames) processing.
+        For 5 frames: processes via our pipeline, gets Gemini analysis, and combines (30% us, 70% Gemini).
         
         Pipeline (single frame):
         1. Screenshot quality analysis
@@ -71,13 +71,13 @@ class AIImageDetector:
         5. Context loss calculation
         6. Severity calculation with caps and constraints
         
-        Pipeline (10 frames):
-        1. Process all 10 frames via our pipeline → our_analysis (30%)
-        2. Send 10 frames to Gemini → gemini_analysis (70%)
+        Pipeline (5 frames):
+        1. Process all 5 frames via our pipeline → our_analysis (30%)
+        2. Send 5 frames to Gemini → gemini_analysis (70%)
         3. Combine results with weighted average
         
         Args:
-            image_bytes: Raw image bytes (single frame) or List[bytes] (10 frames)
+            image_bytes: Raw image bytes (single frame) or List[bytes] (5 frames)
         
         Returns:
             DetectionResult with complete analysis
@@ -87,13 +87,11 @@ class AIImageDetector:
         """
         # Handle multi-frame processing
         if isinstance(image_bytes, list):
-            if len(image_bytes) == 10:
-                return self._analyze_multi_frame(image_bytes)
-            elif len(image_bytes) == 1:
+            if len(image_bytes) == 1:
                 # Single frame in list - extract it
                 image_bytes = image_bytes[0]
             else:
-                raise ValueError(f"Expected 1 or 10 frames, but received {len(image_bytes)}")
+                raise ValueError(f"Expected 1 frame, but received {len(image_bytes)}")
         
         # Single frame processing (original logic)
         # Convert bytes to PIL Image (reused across stages)
@@ -253,7 +251,7 @@ class AIImageDetector:
     
     def _analyze_multi_frame(self, image_bytes_list: List[bytes]) -> DetectionResult:
         """
-        Process 10 frames: combine our analysis (30%) with Gemini's analysis (70%).
+        Process 5 frames: combine our analysis (30%) with Gemini's analysis (70%).
         
         Args:
             image_bytes_list: List of 10 image bytes
@@ -261,7 +259,7 @@ class AIImageDetector:
         Returns:
             Combined DetectionResult
         """
-        logger.info("Processing 10 frames with multi-frame pipeline...")
+        logger.info("Processing 5 frames with multi-frame pipeline...")
         
         # Initialize analyzers if not already initialized
         if self.multi_frame_analyzer is None:
@@ -276,33 +274,37 @@ class AIImageDetector:
             logger.error(f"Our multi-frame analysis failed: {str(e)}", exc_info=True)
             raise Exception(f"Multi-frame analysis failed: {str(e)}")
         
-        # Step 2: Get Gemini analysis (70% weight)
-        logger.info("Step 2: Getting Gemini analysis...")
-        gemini_analysis = None
-        try:
-            if self.gemini_analyzer is None:
-                api_key = os.getenv("GEMINI_API_KEY")
-                if api_key:
-                    self.gemini_analyzer = GeminiAnalyzer(api_key=api_key)
-                else:
-                    logger.warning("GEMINI_API_KEY not set, skipping Gemini analysis")
-            
-            if self.gemini_analyzer:
-                gemini_result = self.gemini_analyzer.analyze_frames(image_bytes_list)
-                logger.info(f"Gemini analysis: severity={gemini_result.get('severity')}, "
-                          f"confidence={gemini_result.get('confidence', 0.0):.4f}")
-                gemini_analysis = gemini_result
-        except Exception as e:
-            logger.warning(f"Gemini analysis failed: {str(e)}, falling back to our analysis only")
-            # Continue with our analysis only (100% weight)
+        # Step 2: Get Gemini analysis (70% weight) - TEMPORARILY DISABLED
+        # logger.info("Step 2: Getting Gemini analysis...")
+        # gemini_analysis = None
+        # try:
+        #     if self.gemini_analyzer is None:
+        #         api_key = os.getenv("GEMINI_API_KEY")
+        #         if api_key:
+        #             self.gemini_analyzer = GeminiAnalyzer(api_key=api_key)
+        #         else:
+        #             logger.warning("GEMINI_API_KEY not set, skipping Gemini analysis")
+        #     
+        #     if self.gemini_analyzer:
+        #         gemini_result = self.gemini_analyzer.analyze_frames(image_bytes_list)
+        #         logger.info(f"Gemini analysis: severity={gemini_result.get('severity')}, "
+        #                   f"confidence={gemini_result.get('confidence', 0.0):.4f}")
+        #         gemini_analysis = gemini_result
+        # except Exception as e:
+        #     logger.warning(f"Gemini analysis failed: {str(e)}, falling back to our analysis only")
+        #     # Continue with our analysis only (100% weight)
         
-        # Step 3: Combine results
-        if gemini_analysis:
-            logger.info("Step 3: Combining our analysis (30%) with Gemini (70%)...")
-            final_result = self._combine_analyses(our_analysis, gemini_analysis)
-        else:
-            logger.info("Using our analysis only (Gemini unavailable)")
-            final_result = our_analysis
+        # Step 3: Combine results - TEMPORARILY USING OUR ANALYSIS ONLY
+        # if gemini_analysis:
+        #     logger.info("Step 3: Combining our analysis (30%) with Gemini (70%)...")
+        #     final_result = self._combine_analyses(our_analysis, gemini_analysis)
+        # else:
+        #     logger.info("Using our analysis only (Gemini unavailable)")
+        #     final_result = our_analysis
+        
+        # Use our analysis only (Gemini disabled)
+        logger.info("Using our analysis only (Gemini temporarily disabled)")
+        final_result = our_analysis
         
         logger.info(f"Final combined result: severity={final_result.severity}, "
                    f"confidence={final_result.confidence:.4f}")

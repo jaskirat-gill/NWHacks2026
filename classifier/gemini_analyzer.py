@@ -42,10 +42,10 @@ class GeminiAnalyzer:
     
     def analyze_frames(self, image_bytes_list: List[bytes]) -> Dict[str, Any]:
         """
-        Send 10 frames to Gemini and get structured JSON analysis.
+        Send 5 frames to Gemini and get structured JSON analysis.
         
         Args:
-            image_bytes_list: List of 10 image bytes (base64 will be computed internally)
+            image_bytes_list: List of 5 image bytes (base64 will be computed internally)
         
         Returns:
             Dictionary with structured analysis results:
@@ -61,8 +61,8 @@ class GeminiAnalyzer:
         Raises:
             Exception: If API call fails after retries
         """
-        if len(image_bytes_list) != 10:
-            raise ValueError(f"Expected exactly 10 frames, but received {len(image_bytes_list)}")
+        if len(image_bytes_list) != 5:
+            raise ValueError(f"Expected exactly 5 frames, but received {len(image_bytes_list)}")
         
         prompt = self._build_prompt()
         

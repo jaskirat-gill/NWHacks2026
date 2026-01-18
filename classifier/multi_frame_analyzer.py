@@ -1,21 +1,23 @@
 """
 Multi-Frame Analyzer
 
-Processes 10 frames individually and combines results via voting and averaging.
+Processes 5 frames individually and combines results via voting and averaging.
 """
 
-from typing import List
+from typing import List, TYPE_CHECKING
 from collections import Counter
 import logging
 from models import DetectionResult
-from detector import AIImageDetector
+
+if TYPE_CHECKING:
+    from detector import AIImageDetector
 
 logger = logging.getLogger(__name__)
 
 class MultiFrameAnalyzer:
     """Processes multiple frames and combines results."""
     
-    def __init__(self, detector: AIImageDetector):
+    def __init__(self, detector: "AIImageDetector"):
         """
         Initialize multi-frame analyzer.
         
@@ -26,16 +28,16 @@ class MultiFrameAnalyzer:
     
     def analyze_frames(self, image_bytes_list: List[bytes]) -> DetectionResult:
         """
-        Process 10 frames individually and combine results.
+        Process 5 frames individually and combine results.
         
         Args:
-            image_bytes_list: List of 10 image bytes
+            image_bytes_list: List of 5 image bytes
         
         Returns:
             Combined DetectionResult with voted severity and averaged scores
         """
-        if len(image_bytes_list) != 10:
-            raise ValueError(f"Expected exactly 10 frames, but received {len(image_bytes_list)}")
+        if len(image_bytes_list) != 5:
+            raise ValueError(f"Expected exactly 5 frames, but received {len(image_bytes_list)}")
         
         logger.info(f"Processing {len(image_bytes_list)} frames individually...")
         
