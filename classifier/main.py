@@ -56,7 +56,7 @@ else:
 lesson_jobs: Dict[str, Dict[str, Any]] = {}
 
 
-def generate_lesson_background(job_id: str, detection_result: DetectionResult):
+def generate_lesson_background(job_id: str, detection_result: DetectionResult, image_bytes: bytes):
     """
     Background task to generate educational lesson.
     Updates job status in lesson_jobs dict.
@@ -76,7 +76,7 @@ def generate_lesson_background(job_id: str, detection_result: DetectionResult):
         # Run async lesson generation
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        lesson = loop.run_until_complete(lesson_generator.generate_lesson(detection_result))
+        lesson = loop.run_until_complete(lesson_generator.generate_lesson(detection_result, image_bytes))
         loop.close()
         
         lesson_jobs[job_id] = {
@@ -153,7 +153,7 @@ async def analyze_image(
         
         # Trigger background lesson generation if available
         if lesson_generator:
-            background_tasks.add_task(generate_lesson_background, job_id, detection_result)
+            background_tasks.add_task(generate_lesson_background, job_id, detection_result, image_bytes)
             logger.info(f"Started background lesson generation for job {job_id}")
         else:
             # Mark job as unavailable

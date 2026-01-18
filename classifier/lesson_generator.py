@@ -35,12 +35,13 @@ class LessonGenerator:
         self.model_name = 'gemini-2.5-flash'
         logger.info("LessonGenerator initialized with Gemini API")
     
-    async def generate_lesson(self, detection_result: DetectionResult) -> str:
+    async def generate_lesson(self, detection_result: DetectionResult, image_bytes: Optional[bytes] = None) -> str:
         """
         Generate educational explanation based on detection results.
         
         Args:
             detection_result: DetectionResult from the detection pipeline
+            image_bytes: Optional raw image bytes to send to Gemini for visual analysis
         
         Returns:
             Educational explanation string
@@ -51,8 +52,8 @@ class LessonGenerator:
         try:
             prompt = self._build_prompt(detection_result)
             
-            # Generate lesson with timeout
-            response = await self._call_gemini_with_retry(prompt)
+            # Generate lesson with timeout (includes image if provided)
+            response = await self._call_gemini_with_retry(prompt, image_bytes)
             
             # Parse response - expect JSON with 'lesson' field
             lesson = self._parse_response(response)
@@ -115,12 +116,13 @@ Example format:
         
         return prompt
     
-    async def _call_gemini_with_retry(self, prompt: str) -> str:
+    async def _call_gemini_with_retry(self, prompt: str, image_bytes: Optional[bytes] = None) -> str:
         """
         Call Gemini API with retry logic and timeout handling.
         
         Args:
             prompt: Prompt string for Gemini
+            image_bytes: Optional image bytes to include in the request
         
         Returns:
             Response text from Gemini
@@ -135,7 +137,7 @@ Example format:
                 # Run synchronous Gemini call in executor to support timeout
                 loop = asyncio.get_event_loop()
                 response = await asyncio.wait_for(
-                    loop.run_in_executor(None, self._call_gemini_sync, prompt),
+                    loop.run_in_executor(None, self._call_gemini_sync, prompt, image_bytes),
                     timeout=self.TIMEOUT_SECONDS
                 )
                 return response
@@ -152,19 +154,49 @@ Example format:
         
         raise Exception("Failed to generate lesson")
     
-    def _call_gemini_sync(self, prompt: str) -> str:
+    def _call_gemini_sync(self, prompt: str, image_bytes: Optional[bytes] = None) -> str:
         """
         Synchronous Gemini API call (runs in executor).
         
         Args:
             prompt: Prompt string
+            image_bytes: Optional image bytes to include in the request
         
         Returns:
             Response text
         """
+        import base64
+        from PIL import Image
+        import io
+        
+        # Build contents array - can include both text and image
+        contents = [prompt]
+        
+        # Add image if provided
+        if image_bytes:
+            try:
+                # Determine MIME type from image bytes
+                img = Image.open(io.BytesIO(image_bytes))
+                mime_type = f"image/{img.format.lower()}" if img.format else "image/jpeg"
+                
+                # Encode image to base64
+                image_b64 = base64.b64encode(image_bytes).decode()
+                
+                # Add image to contents
+                contents.append({
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": image_b64
+                    }
+                })
+                logger.debug(f"Including image in Gemini request (MIME: {mime_type})")
+            except Exception as e:
+                logger.warning(f"Failed to process image for Gemini: {str(e)}, continuing with text only")
+        
+        # Call Gemini API with multimodal content
         response = self.client.models.generate_content(
             model=self.model_name,
-            contents=prompt
+            contents=contents
         )
         return response.text
     
