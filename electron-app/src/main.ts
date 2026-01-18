@@ -3,6 +3,7 @@ import * as path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DomSensorMessage, DetectionResult, OverlayState } from './types';
 import { captureAndCrop, saveDebugScreenshot, CropRegion } from './screenshot';
+import { startFileWatcher, stopFileWatcher } from './fileWatcher';
 import { detectAI } from './detectorStub';
 
 // State
@@ -378,6 +379,7 @@ function toggleDebugBox(): void {
 app.whenReady().then(() => {
   createOverlayWindow();
   startWebSocketServer();
+  startFileWatcher(); // Start watching screenshots folder
 
   // Register debug shortcut (Cmd+Shift+S to save screenshot)
   globalShortcut.register('CommandOrControl+Shift+S', () => {
@@ -410,6 +412,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   stopScreenshotLoop();
+  stopFileWatcher();
   if (wsServer) {
     wsServer.close();
   }
