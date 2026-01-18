@@ -18,11 +18,23 @@ const DEBOUNCE_MS = 500; // Wait 500ms after last file event before processing
 let watcher: fs.FSWatcher | null = null;
 
 /**
- * Extract post ID from filename (filename minus extension)
+ * Extract base post ID from filename
+ * Filename format: {postId}_frame{N}_{timestamp}.jpg
+ * We want just the postId part so it matches what detectAI() queries with
  */
 function extractPostId(fileName: string): string {
-  // Remove .jpg or .jpeg extension (case insensitive)
-  return fileName.replace(/\.(jpg|jpeg)$/i, '');
+  // Remove extension first
+  const withoutExt = fileName.replace(/\.(jpg|jpeg)$/i, '');
+  
+  // Extract everything before "_frame" to get the base post ID
+  // e.g., "post_2_1768716078333_frame0_1768715657294" -> "post_2_1768716078333"
+  const frameIndex = withoutExt.indexOf('_frame');
+  if (frameIndex !== -1) {
+    return withoutExt.substring(0, frameIndex);
+  }
+  
+  // Fallback: return without extension if no _frame pattern found
+  return withoutExt;
 }
 
 /**

@@ -1,95 +1,83 @@
 import { DetectionResult } from './types';
 
-/**
- * Simple hash function for generating deterministic scores from image bytes
- * @param buffer - Image buffer to hash
- * @returns Hash value
- */
-function hashBuffer(buffer: Buffer): number {
-  let hash = 0;
-  // Sample every 100th byte for performance (don't need to hash entire image)
-  const step = Math.max(1, Math.floor(buffer.length / 1000));
-  
-  for (let i = 0; i < buffer.length; i += step) {
-    hash = ((hash << 5) - hash + buffer[i]) >>> 0;
-  }
-  
-  return hash;
-}
+// Use 127.0.0.1 explicitly to avoid IPv6 resolution issues on Linux
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
 /**
- * Map a score to a label
- * @param score - Score between 0 and 1
+ * Map API response to a label
+ * @param isAI - Whether the image is detected as AI-generated
+ * @param confidence - Confidence score between 0 and 1
  * @returns Label string
  */
-function scoreToLabel(score: number): DetectionResult['label'] {
-  if (score >= 0.75) {
-    return 'Likely AI';
-  } else if (score >= 0.45) {
+function mapToLabel(isAI: boolean, confidence: number): DetectionResult['label'] {
+  // If confidence is low, mark as unclear
+  if (confidence < 0.6) {
     return 'Unclear';
-  } else {
-    return 'Likely Real';
   }
+  return isAI ? 'Likely AI' : 'Likely Real';
 }
 
 /**
- * Stub detector that returns a deterministic fake score based on image hash
- * This can be easily replaced with a real API call later
+ * Fetch detection result from the classifier API
  * 
- * @param imageBuffer - JPEG image buffer to analyze
+ * @param _imageBuffer - JPEG image buffer (unused, fileWatcher sends images separately)
  * @param postId - Unique identifier for the post
  * @returns Detection result with score and label
  */
-export async function detectAI(imageBuffer: Buffer, postId: string): Promise<DetectionResult> {
-  // Simulate some processing time (remove this when using real API)
-  await new Promise(resolve => setTimeout(resolve, 300));
+export async function detectAI(_imageBuffer: Buffer, postId: string): Promise<DetectionResult> {
+  const apiUrl = `${API_BASE_URL}/analyze/${postId}`;
 
-  // Generate deterministic score from image hash
-  const hash = hashBuffer(imageBuffer);
-  const score = (hash % 100) / 100;
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
 
-  const label = scoreToLabel(score);
+    // Handle 404 - analysis not yet complete
+    if (response.status === 404) {
+      console.log(`[Detector] Post ${postId}: Analysis not ready yet`);
+      return {
+        postId,
+        score: 0,
+        label: 'Analyzing...',
+        timestamp: Date.now(),
+      };
+    }
 
-  console.log(`[DetectorStub] Post ${postId}: score=${score.toFixed(2)}, label=${label}`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
 
-  return {
-    postId,
-    score,
-    label,
-    timestamp: Date.now(),
-  };
-}
+    const data = await response.json();
+    
+    // Map API response to DetectionResult
+    // API returns: { is_ai: bool, confidence: float, severity: string, reasons: [], ... }
+    const label = mapToLabel(data.is_ai, data.confidence);
+    
+    console.log(`[Detector] Post ${postId}: is_ai=${data.is_ai}, confidence=${(data.confidence * 100).toFixed(1)}%, severity=${data.severity}, label=${label}`);
 
-/**
- * Placeholder for real detector API call
- * Replace this function body when the real detector is ready
- * 
- * @param imageBuffer - JPEG image buffer to analyze
- * @param postId - Unique identifier for the post
- * @param apiEndpoint - API endpoint URL
- * @returns Detection result with score and label
- */
-export async function detectAIReal(
-  imageBuffer: Buffer,
-  postId: string,
-  apiEndpoint: string
-): Promise<DetectionResult> {
-  // TODO: Implement real API call
-  // Example:
-  // const response = await fetch(apiEndpoint, {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/octet-stream' },
-  //   body: imageBuffer,
-  // });
-  // const data = await response.json();
-  // return {
-  //   postId,
-  //   score: data.score,
-  //   label: scoreToLabel(data.score),
-  //   timestamp: Date.now(),
-  // };
-
-  // For now, fall back to stub
-  console.warn('[Detector] Real API not implemented, using stub');
-  return detectAI(imageBuffer, postId);
+    return {
+      postId,
+      score: data.confidence,
+      label,
+      timestamp: Date.now(),
+    };
+  } catch (error: any) {
+    // Check if it's a connection error
+    if (error?.code === 'ECONNREFUSED' || error?.cause?.code === 'ECONNREFUSED') {
+      console.warn(`[Detector] API server not available at ${API_BASE_URL}. Is the classifier server running?`);
+    } else {
+      console.error(`[Detector] Error fetching result for post ${postId}:`, error);
+    }
+    
+    // Return pending state on error
+    return {
+      postId,
+      score: 0,
+      label: 'Analyzing...',
+      timestamp: Date.now(),
+    };
+  }
 }

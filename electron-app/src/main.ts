@@ -180,11 +180,13 @@ async function triggerDetection(message: DomSensorMessage): Promise<void> {
     // Run detection on the cropped image
     const result = await detectAI(screenshot.buffer, post.id);
 
-    // Cache the result
-    detectionCache.set(post.id, result);
-
-    // Clean old cache entries
-    cleanCache();
+    // Only cache real results, not "Analyzing..." pending state
+    // This ensures we keep polling until we get a real result
+    if (result.label !== 'Analyzing...') {
+      detectionCache.set(post.id, result);
+      // Clean old cache entries
+      cleanCache();
+    }
 
     // Update overlay if this is still the current post
     if (currentPost?.post?.id === post.id) {
@@ -248,7 +250,7 @@ function stopScreenshotLoop(): void {
   currentScreenshotPostId = null;
 }
 
-// Capture a single frame and save to disk
+// Capture a single frame, save to disk, and fetch latest detection result
 async function captureFrame(message: DomSensorMessage): Promise<void> {
   if (!message.post) return;
 
@@ -272,6 +274,24 @@ async function captureFrame(message: DomSensorMessage): Promise<void> {
 
     // Also store for debug saving via hotkey
     lastScreenshotBuffer = screenshot.buffer;
+
+    // Fetch latest detection result from API and update overlay
+    // The fileWatcher sends images to the API, we just query for results
+    try {
+      const result = await detectAI(screenshot.buffer, post.id);
+      
+      // Only cache and update if we got a real result (not "Analyzing...")
+      if (result.label !== 'Analyzing...') {
+        detectionCache.set(post.id, result);
+      }
+      
+      // Update overlay if this is still the current post
+      if (currentPost?.post?.id === post.id) {
+        updateOverlayWithDetection(post, result);
+      }
+    } catch (err) {
+      console.error(`[ScreenshotLoop] Error fetching detection for frame ${frameCounter}:`, err);
+    }
   }
 }
 
