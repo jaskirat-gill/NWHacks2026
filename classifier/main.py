@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
-from classifier import Classifier
+from detector import AIImageDetector
 import logging
 
 # Configure logging
@@ -9,15 +9,15 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="AI vs Human Image Classifier",
-    description="Classify images as AI-generated or human-created using Ateeqq/ai-vs-human-image-detector",
-    version="1.0.0"
+    title="AI Image Detection System",
+    description="Comprehensive AI image detection with severity scoring and risk analysis",
+    version="2.0.0"
 )
 
-# Load classifier at startup
-logger.info("Initializing classifier...")
-classifier = Classifier()
-logger.info("Classifier initialized successfully")
+# Initialize unified detector at startup
+logger.info("Initializing AI Image Detector...")
+detector = AIImageDetector()
+logger.info("AI Image Detector ready")
 
 
 @app.get("/health")
@@ -29,20 +29,26 @@ async def health_check():
 @app.post("/classify")
 async def classify_image(file: UploadFile = File(...)):
     """
-    Classify an uploaded image as AI-generated or human-created.
+    Analyze an uploaded image with complete detection pipeline.
+    
+    This endpoint runs the full detection pipeline:
+    - ML classification
+    - Visual analysis
+    - Intent detection
+    - Severity calculation
     
     Args:
         file: Image file (multipart/form-data)
         
     Returns:
-        JSON response with classification results:
+        JSON response with complete DetectionResult:
         {
-            "label": "ai" or "hum",
+            "is_ai": bool,
             "confidence": float (0-1),
-            "scores": {
-                "ai": float,
-                "hum": float
-            }
+            "severity": "LOW" | "MEDIUM" | "HIGH",
+            "reasons": List[str],
+            "risk_factors": Dict,
+            "classifier_scores": Dict
         }
     """
     # Validate content type
@@ -59,10 +65,15 @@ async def classify_image(file: UploadFile = File(...)):
         if len(image_bytes) == 0:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
         
-        # Classify image
-        result = classifier.predict(image_bytes)
+        # Run complete detection pipeline
+        detection_result = detector.analyze(image_bytes)
         
-        logger.info(f"Classification result: {result['label']} (confidence: {result['confidence']:.4f})")
+        # Convert DetectionResult to dict for JSON response
+        result = detection_result.to_dict()
+        
+        logger.info(f"Detection complete: {detection_result.severity} severity "
+                   f"({'AI' if detection_result.is_ai else 'Human'}, "
+                   f"{detection_result.confidence:.0%} confidence)")
         
         return JSONResponse(content=result)
         

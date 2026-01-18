@@ -4,4 +4,8 @@ python-multipart
 transformers
 torch
 Pillow
+# mediapipe  # Optional - only needed for hand detection, currently disabled due to API changes
+opencv-python
+pytesseract
+numpy
 
