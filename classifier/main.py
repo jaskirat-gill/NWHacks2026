@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from detector import AIImageDetector
 from models import DetectionResult
+from gemini_analyzer import GeminiAnalyzer
 from lesson_generator import LessonGenerator
 import logging
 import os
@@ -10,6 +11,7 @@ import glob
 import base64
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+import os
 
 # Load environment variables from .env file
 load_dotenv()
@@ -60,8 +62,8 @@ def get_lesson_generator() -> LessonGenerator:
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'screenshots')
 
 # In-memory storage for analysis results
-# Key: analysis_id (string), Value: DetectionResult
-analysis_results: Dict[str, DetectionResult] = {}
+# Key: analysis_id (string), Value: Tuple[DetectionResult, bytes] (result and original image bytes)
+analysis_results: Dict[str, Tuple[DetectionResult, bytes]] = {}
 
 @app.get("/health")
 async def health_check():
@@ -136,8 +138,9 @@ async def analyze_image(
         # Run complete detection pipeline (handles both single and multi-frame)
         detection_result = detector.analyze(image_bytes_list)
         
-        # Store result in memory
-        analysis_results[analysis_id] = detection_result
+        # Store result and original image bytes in memory
+        image_bytes = image_bytes_list[0]  # Store the single image
+        analysis_results[analysis_id] = (detection_result, image_bytes)
         
         logger.info(f"Analysis stored with ID {analysis_id}: {detection_result.severity} severity "
                    f"({'AI' if detection_result.is_ai else 'Human'}, "
@@ -189,7 +192,7 @@ async def get_analysis(analysis_id: str = Path(..., description="Unique identifi
             detail=f"Analysis with ID '{analysis_id}' not found"
         )
     
-    detection_result = analysis_results[analysis_id]
+    detection_result, _ = analysis_results[analysis_id]
     
     logger.info(f"Retrieved analysis with ID {analysis_id}")
     

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect }, { useState, useEffect } from 'react';
 import { EducationData } from '../types';
 
 interface BadgeProps {
@@ -6,6 +6,7 @@ interface BadgeProps {
   y: number;
   label: string;
   score: number;
+  postId: string | null;
   postId: string | null;
 }
 

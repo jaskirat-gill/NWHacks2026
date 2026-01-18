@@ -1,5 +1,7 @@
 import { app, BrowserWindow, screen, globalShortcut, ipcMain } from 'electron';
+import { app, BrowserWindow, screen, globalShortcut, ipcMain } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DomSensorMessage, DetectionResult, OverlayState, EducationData } from './types';
 import { captureAndCrop, saveDebugScreenshot, CropRegion } from './screenshot';
@@ -11,6 +13,7 @@ const API_BASE_URL = 'http://127.0.0.1:8000';
 
 // State
 let overlayWindow: BrowserWindow | null = null;
+let controlWindow: BrowserWindow | null = null;
 let wsServer: WebSocketServer | null = null;
 let currentPost: DomSensorMessage | null = null;
 let detectionCache: Map<string, DetectionResult> = new Map();
@@ -18,6 +21,7 @@ let lastDetectionTime = 0;
 let detectionInFlight = false;
 let lastScreenshotBuffer: Buffer | null = null;
 let showDebugBox = true;  // Toggle with Cmd+Shift+D
+let detectionEnabled = true;  // Detection enabled/disabled state
 
 // Continuous screenshot loop state
 let screenshotLoop: NodeJS.Timeout | null = null;
@@ -61,6 +65,36 @@ function createOverlayWindow(): void {
 
   overlayWindow.on('closed', () => {
     overlayWindow = null;
+  });
+}
+
+// Create control window
+function createControlWindow(): void {
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.focus();
+    return;
+  }
+
+  controlWindow = new BrowserWindow({
+    width: 600,
+    height: 800,
+    frame: true,
+    resizable: true,
+    alwaysOnTop: false,
+    skipTaskbar: false,
+    title: 'Reality Check - Control Panel',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  // Load control window HTML
+  controlWindow.loadFile(path.join(__dirname, 'renderer', 'control.html'));
+
+  controlWindow.on('closed', () => {
+    controlWindow = null;
   });
 }
 
@@ -115,6 +149,7 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
 
   const { post, dpr } = message;
 
+  if (detectionEnabled) {
   // Check cache for existing detection (with valid, non-Analyzing result)
   const cached = detectionCache.get(post.id);
   if (cached && cached.label !== 'Analyzing...' && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -125,7 +160,7 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
 
   // No valid cached result - start screenshot capture for this post
   startScreenshotLoop(message);
-
+  }
   // Show "Analyzing..." while waiting
   updateOverlay({
     visible: true,
@@ -313,7 +348,7 @@ async function captureFrame(message: DomSensorMessage): Promise<void> {
 
 // Start continuous screenshot capture for a post (with delay for scroll to settle)
 function startScreenshotLoop(message: DomSensorMessage): void {
-  if (!message.post) return;
+  if (!message.post || !detectionEnabled) return;
 
   // If already capturing or waiting to capture for this post, do nothing
   if (currentScreenshotPostId === message.post.id && (screenshotLoop || screenshotStartDelay)) {
@@ -453,6 +488,7 @@ async function fetchEducation(postId: string): Promise<EducationData> {
 // App lifecycle
 app.whenReady().then(() => {
   createOverlayWindow();
+  createControlWindow();
   startWebSocketServer();
   startFileWatcher(); // Start watching screenshots folder
 
@@ -493,6 +529,7 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createOverlayWindow();
+      createControlWindow();
     }
   });
 });
