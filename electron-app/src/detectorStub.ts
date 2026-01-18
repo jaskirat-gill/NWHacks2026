@@ -23,17 +23,33 @@ function extractBasePostId(fullPostId: string): string {
 }
 
 /**
- * Map API response to a label
+ * Map API response to a label based on confidence thresholds
  * @param isAI - Whether the image is detected as AI-generated
  * @param confidence - Confidence score between 0 and 1
  * @returns Label string
+ * 
+ * Thresholds:
+ * - Likely Real: is_ai=false AND confidence >= 70%
+ * - Unclear: confidence < 60% (either direction)
+ * - Possibly AI: is_ai=true AND confidence 60-80%
+ * - Likely AI: is_ai=true AND confidence >= 80%
  */
 function mapToLabel(isAI: boolean, confidence: number): DetectionResult['label'] {
-  // If confidence is low, mark as unclear
+  // Low confidence = unclear
   if (confidence < 0.6) {
     return 'Unclear';
   }
-  return isAI ? 'Likely AI' : 'Likely Real';
+  
+  if (isAI) {
+    // AI detected - differentiate by confidence
+    if (confidence >= 0.8) {
+      return 'Likely AI';      // High confidence AI
+    }
+    return 'Possibly AI';      // Medium confidence AI
+  }
+  
+  // Not AI detected
+  return 'Likely Real';
 }
 
 /**

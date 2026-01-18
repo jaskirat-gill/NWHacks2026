@@ -20,7 +20,7 @@ export interface DomSensorMessage {
 export interface DetectionResult {
   postId: string;
   score: number;            // 0-1 confidence score
-  label: 'Likely AI' | 'Unclear' | 'Likely Real' | 'Analyzing...';
+  label: 'Likely Real' | 'Unclear' | 'Possibly AI' | 'Likely AI' | 'Analyzing...';
   timestamp: number;
 }
 
