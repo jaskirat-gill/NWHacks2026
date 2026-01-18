@@ -49,13 +49,22 @@ async def health_check():
     }
 
 
+@app.get("/debug/analyses")
+async def list_analyses():
+    """Debug endpoint to list all stored analysis IDs."""
+    return {
+        "count": len(analysis_results),
+        "analysis_ids": list(analysis_results.keys())
+    }
+
+
 @app.post("/analyze/{analysis_id}")
 async def analyze_image(
     analysis_id: str = Path(..., description="Unique identifier for this analysis"),
     files: List[UploadFile] = File(...)
 ):
     """
-    Analyze uploaded images (10 frames) and store the result in memory.
+    Analyze uploaded image (1 frame) and store the result in memory.
     
     The analysis is stored with the provided ID and can be retrieved later
     using GET /analyze/{analysis_id}.
@@ -72,11 +81,11 @@ async def analyze_image(
             "message": "Analysis stored successfully"
         }
     """
-    # Validate file count (should be 10 frames)
-    if len(files) != 10:
+    # Validate file count (should be 1 frame)
+    if len(files) != 1:
         raise HTTPException(
             status_code=400,
-            detail=f"Expected exactly 10 image files, but received {len(files)}"
+            detail=f"Expected exactly 1 image file, but received {len(files)}"
         )
     
     # Validate content types

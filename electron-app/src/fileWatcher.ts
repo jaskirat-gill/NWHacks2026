@@ -10,11 +10,14 @@ const API_BASE_URL = 'http://127.0.0.1:8000';
 // Track processed files to avoid duplicates
 const processedFiles = new Set<string>();
 
+// Track posts that have already been sent to the API (to avoid re-analyzing)
+const sentPostIds = new Set<string>();
+
 // Debounce timeout for file events
 let debounceTimer: NodeJS.Timeout | null = null;
 const DEBOUNCE_MS = 500; // Wait 500ms after last file event before processing
 
-// Batch queue: group files by postId, accumulate up to 10 files per post
+// Batch queue: group files by postId, accumulate up to BATCH_SIZE files per post
 interface QueuedFile {
   fileName: string;
   filePath: string;
@@ -23,7 +26,7 @@ interface QueuedFile {
 }
 
 const fileQueue = new Map<string, QueuedFile[]>(); // postId -> list of queued files
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 1;
 
 // File watcher instance
 let watcher: fs.FSWatcher | null = null;
@@ -124,7 +127,8 @@ async function sendImageBatchToAPI(filePaths: string[], postId: string): Promise
 }
 
 /**
- * Process a new .jpg file - add to queue and send batch when we have 10 files for a post
+ * Process a new .jpg file - add to queue and send batch when we have BATCH_SIZE files for a post
+ * Only sends ONE batch per post ID to avoid redundant processing.
  */
 async function processNewFile(fileName: string): Promise<void> {
   // Only process .jpg files
@@ -156,6 +160,11 @@ async function processNewFile(fileName: string): Promise<void> {
   // Extract post ID from filename
   const postId = extractPostId(fileName);
 
+  // Skip if we already sent a batch for this post (avoid re-analyzing)
+  if (sentPostIds.has(postId)) {
+    return;
+  }
+
   // Add to queue
   if (!fileQueue.has(postId)) {
     fileQueue.set(postId, []);
@@ -171,10 +180,13 @@ async function processNewFile(fileName: string): Promise<void> {
 
   console.log(`[FileWatcher] Queued file: ${fileName} with post ID: ${postId} (queue size: ${queue.length}/${BATCH_SIZE})`);
 
-  // If we have exactly 10 files for this post, send the batch
+  // If we have enough files for this post, send the batch
   if (queue.length === BATCH_SIZE) {
     const batchFiles = queue.splice(0, BATCH_SIZE); // Remove from queue
     const filePaths = batchFiles.map(f => f.filePath);
+    
+    // Mark this post as sent so we don't re-analyze it
+    sentPostIds.add(postId);
     
     console.log(`[FileWatcher] Batch complete! Sending ${BATCH_SIZE} files for post ID: ${postId}`);
     await sendImageBatchToAPI(filePaths, postId);
@@ -248,7 +260,9 @@ export function stopFileWatcher(): void {
     console.log('[FileWatcher] Stopped watching directory');
   }
 
-  // Clear queue
+  // Clear all state
   fileQueue.clear();
+  sentPostIds.clear();
+  processedFiles.clear();
 }
 

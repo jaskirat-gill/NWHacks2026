@@ -145,19 +145,18 @@ function handleDomSensorMessage(message: DomSensorMessage): void {
 
   const { post, dpr } = message;
 
-  // Start continuous screenshot capture for this post (only if detection is enabled)
   if (detectionEnabled) {
-    startScreenshotLoop(message);
-  }
-
-  // Check cache for existing detection
+  // Check cache for existing detection (with valid, non-Analyzing result)
   const cached = detectionCache.get(post.id);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    // Use cached result
+  if (cached && cached.label !== 'Analyzing...' && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    // Use cached result - no need to start screenshot loop
     updateOverlayWithDetection(post, cached);
     return;
   }
 
+  // No valid cached result - start screenshot capture for this post
+  startScreenshotLoop(message);
+  }
   // Show "Analyzing..." while waiting
   updateOverlay({
     visible: true,
@@ -291,6 +290,16 @@ async function captureFrame(message: DomSensorMessage): Promise<void> {
 
   const { post, dpr } = message;
 
+  // Check if we already have a cached result for this post
+  const cached = detectionCache.get(post.id);
+  if (cached && cached.label !== 'Analyzing...') {
+    // Already have a result, just update overlay and stop the loop
+    console.log(`[ScreenshotLoop] Already have result for ${post.id}, stopping capture loop`);
+    updateOverlayWithDetection(post, cached);
+    stopScreenshotLoop();
+    return;
+  }
+
   const cropRegion: CropRegion = {
     x: post.x,
     y: post.y,
@@ -318,6 +327,9 @@ async function captureFrame(message: DomSensorMessage): Promise<void> {
       // Only cache and update if we got a real result (not "Analyzing...")
       if (result.label !== 'Analyzing...') {
         detectionCache.set(post.id, result);
+        console.log(`[ScreenshotLoop] Got result for ${post.id}: ${result.label}, stopping capture loop`);
+        // Stop the loop now that we have a result
+        stopScreenshotLoop();
       }
       
       // Update overlay if this is still the current post
