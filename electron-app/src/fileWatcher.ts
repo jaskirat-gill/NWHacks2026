@@ -14,6 +14,17 @@ const processedFiles = new Set<string>();
 let debounceTimer: NodeJS.Timeout | null = null;
 const DEBOUNCE_MS = 500; // Wait 500ms after last file event before processing
 
+// Batch queue: group files by postId, accumulate up to 10 files per post
+interface QueuedFile {
+  fileName: string;
+  filePath: string;
+  postId: string;
+  timestamp: number;
+}
+
+const fileQueue = new Map<string, QueuedFile[]>(); // postId -> list of queued files
+const BATCH_SIZE = 10;
+
 // File watcher instance
 let watcher: fs.FSWatcher | null = null;
 
@@ -38,13 +49,14 @@ function extractPostId(fileName: string): string {
 }
 
 /**
- * Send image file to the analyze API endpoint
+ * Send batch of image files (10 files) to the analyze API endpoint
  */
-async function sendImageToAPI(filePath: string, postId: string): Promise<void> {
+async function sendImageBatchToAPI(filePaths: string[], postId: string): Promise<void> {
   try {
-    // Read the file
-    const fileBuffer = await fs.promises.readFile(filePath);
-    const fileName = path.basename(filePath);
+    if (filePaths.length !== BATCH_SIZE) {
+      console.warn(`[FileWatcher] Expected ${BATCH_SIZE} files, got ${filePaths.length}. Skipping batch.`);
+      return;
+    }
 
     // Build API URL with post ID
     const apiUrl = `${API_BASE_URL}/analyze/${postId}`;
@@ -53,17 +65,22 @@ async function sendImageToAPI(filePath: string, postId: string): Promise<void> {
     const boundary = `----WebKitFormBoundary${Date.now()}`;
     const formDataParts: Buffer[] = [];
 
-    // Add file field
-    formDataParts.push(Buffer.from(`--${boundary}\r\n`));
-    formDataParts.push(Buffer.from(`Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n`));
-    formDataParts.push(Buffer.from(`Content-Type: image/jpeg\r\n\r\n`));
-    formDataParts.push(fileBuffer);
-    formDataParts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+    // Add all files (API expects "files" field with multiple files)
+    for (const filePath of filePaths) {
+      const fileBuffer = await fs.promises.readFile(filePath);
+      const fileName = path.basename(filePath);
+
+      formDataParts.push(Buffer.from(`--${boundary}\r\n`));
+      formDataParts.push(Buffer.from(`Content-Disposition: form-data; name="files"; filename="${fileName}"\r\n`));
+      formDataParts.push(Buffer.from(`Content-Type: image/jpeg\r\n\r\n`));
+      formDataParts.push(fileBuffer);
+      formDataParts.push(Buffer.from(`\r\n`));
+    }
+    formDataParts.push(Buffer.from(`--${boundary}--\r\n`));
 
     const body = Buffer.concat(formDataParts);
 
     // Send POST request
-    // Note: Content-Type header includes boundary as required for multipart/form-data
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
@@ -78,21 +95,23 @@ async function sendImageToAPI(filePath: string, postId: string): Promise<void> {
     }
 
     const result = await response.json();
-    console.log(`[FileWatcher] Successfully sent ${fileName} to API with post ID ${postId}. Response:`, result);
+    const fileNames = filePaths.map(p => path.basename(p)).join(', ');
+    console.log(`[FileWatcher] Successfully sent batch of ${filePaths.length} files (${fileNames}) to API with post ID ${postId}. Response:`, result);
   } catch (error: any) {
     // Check if it's a connection error
     if (error?.code === 'ECONNREFUSED' || error?.cause?.code === 'ECONNREFUSED') {
       console.warn(`[FileWatcher] API server not available at ${API_BASE_URL}. Is the classifier server running?`);
       console.warn(`[FileWatcher] To start the API server, run: cd classifier && python main.py`);
     } else {
-      console.error(`[FileWatcher] Error sending ${filePath} to API:`, error);
+      const fileNames = filePaths.map(p => path.basename(p)).join(', ');
+      console.error(`[FileWatcher] Error sending batch (${fileNames}) to API:`, error);
     }
     // Don't throw - continue watching even if API call fails
   }
 }
 
 /**
- * Process a new .jpg file
+ * Process a new .jpg file - add to queue and send batch when we have 10 files for a post
  */
 async function processNewFile(fileName: string): Promise<void> {
   // Only process .jpg files
@@ -121,12 +140,32 @@ async function processNewFile(fileName: string): Promise<void> {
   // Mark as processed
   processedFiles.add(fileName);
 
-  // Extract post ID from filename (filename minus extension)
+  // Extract post ID from filename
   const postId = extractPostId(fileName);
 
-  // Send to API
-  console.log(`[FileWatcher] Processing new file: ${fileName} with post ID: ${postId}`);
-  await sendImageToAPI(filePath, postId);
+  // Add to queue
+  if (!fileQueue.has(postId)) {
+    fileQueue.set(postId, []);
+  }
+
+  const queue = fileQueue.get(postId)!;
+  queue.push({
+    fileName,
+    filePath,
+    postId,
+    timestamp: Date.now(),
+  });
+
+  console.log(`[FileWatcher] Queued file: ${fileName} with post ID: ${postId} (queue size: ${queue.length}/${BATCH_SIZE})`);
+
+  // If we have exactly 10 files for this post, send the batch
+  if (queue.length === BATCH_SIZE) {
+    const batchFiles = queue.splice(0, BATCH_SIZE); // Remove from queue
+    const filePaths = batchFiles.map(f => f.filePath);
+    
+    console.log(`[FileWatcher] Batch complete! Sending ${BATCH_SIZE} files for post ID: ${postId}`);
+    await sendImageBatchToAPI(filePaths, postId);
+  }
 }
 
 /**
@@ -195,5 +234,8 @@ export function stopFileWatcher(): void {
     watcher = null;
     console.log('[FileWatcher] Stopped watching directory');
   }
+
+  // Clear queue
+  fileQueue.clear();
 }
 
