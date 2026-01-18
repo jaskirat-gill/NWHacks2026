@@ -72,7 +72,7 @@ export function MonitoringControl({ isMonitoring, onStart, onStop }: MonitoringC
           className="w-full py-3.5 px-4 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded-lg transition-all duration-200 flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(0,200,200,0.2)] hover:shadow-[0_0_30px_rgba(0,200,200,0.3)]"
         >
           <Play className="w-4 h-4" />
-          Start Monitoring
+          Start Learning
         </button>
       ) : (
         <button
@@ -80,7 +80,7 @@ export function MonitoringControl({ isMonitoring, onStart, onStop }: MonitoringC
           className="w-full py-3.5 px-4 bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/30 font-semibold rounded-lg transition-all duration-200 flex items-center justify-center gap-2"
         >
           <Square className="w-4 h-4" />
-          Stop Monitoring
+          Stop Analysis
         </button>
       )}
     </div>

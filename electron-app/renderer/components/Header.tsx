@@ -22,7 +22,7 @@ export function Header({ currentTime, isMonitoring }: HeaderProps) {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">RealityCheck</h1>
-              <p className="text-xs text-muted-foreground">Threat Detection System</p>
+              <p className="text-xs text-muted-foreground">AI Detection Learning Tool</p>
             </div>
           </div>
 
@@ -31,7 +31,7 @@ export function Header({ currentTime, isMonitoring }: HeaderProps) {
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/50 border border-border">
               <Activity className={`w-4 h-4 ${isMonitoring ? "text-success animate-pulse" : "text-muted-foreground"}`} />
               <span className="text-sm font-medium">
-                {isMonitoring ? "Scanning Active" : "System Idle"}
+                {isMonitoring ? "Analyzing Content" : "Ready to Learn"}
               </span>
             </div>
           </div>

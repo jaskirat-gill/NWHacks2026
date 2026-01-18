@@ -14,7 +14,7 @@ export function Settings() {
     {
       id: "notifications",
       label: "Push Notifications",
-      description: "Get alerts for high-risk threats",
+      description: "Get alerts when AI content is detected",
       icon: Bell,
       enabled: true,
     },
@@ -28,14 +28,14 @@ export function Settings() {
     {
       id: "realtime",
       label: "Real-time Analysis",
-      description: "Analyze threats as they appear",
+      description: "Analyze content as it appears",
       icon: Zap,
       enabled: false,
     },
     {
       id: "enhanced",
-      label: "Enhanced Protection",
-      description: "Deep learning threat detection",
+      label: "Enhanced Detection",
+      description: "Deep learning AI detection models",
       icon: Shield,
       enabled: true,
     },

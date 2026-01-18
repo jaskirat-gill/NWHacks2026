@@ -61,9 +61,9 @@ export function ThreatLog({ threats }: ThreatLogProps) {
       {/* Header */}
       <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold">Threat Log</h2>
+          <h2 className="text-lg font-semibold">Detection Log</h2>
           <p className="text-sm text-muted-foreground">
-            {filteredThreats.length} {filter === "ALL" ? "total" : filter.toLowerCase()} threats detected
+            {filteredThreats.length} {filter === "ALL" ? "total" : filter.toLowerCase()} AI content {filteredThreats.length === 1 ? "item" : "items"} found
           </p>
         </div>
 
@@ -95,9 +95,9 @@ export function ThreatLog({ threats }: ThreatLogProps) {
             <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-secondary flex items-center justify-center">
               <Info className="w-8 h-8 text-muted-foreground" />
             </div>
-            <p className="text-muted-foreground">No threats detected</p>
+            <p className="text-muted-foreground">No AI content detected</p>
             <p className="text-sm text-muted-foreground/70 mt-1">
-              Start monitoring to detect threats
+              Start monitoring to learn about AI-generated content
             </p>
           </div>
         ) : (

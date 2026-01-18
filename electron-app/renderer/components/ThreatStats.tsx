@@ -14,7 +14,7 @@ export function ThreatStats({ threatCounts, isMonitoring }: ThreatStatsProps) {
 
   const stats = [
     {
-      label: "Critical Threats",
+      label: "High Confidence AI",
       value: threatCounts.high,
       icon: AlertTriangle,
       color: "text-destructive",
@@ -22,7 +22,7 @@ export function ThreatStats({ threatCounts, isMonitoring }: ThreatStatsProps) {
       border: "border-destructive/20",
     },
     {
-      label: "Medium Risk",
+      label: "Possible AI",
       value: threatCounts.medium,
       icon: AlertCircle,
       color: "text-warning",
@@ -30,7 +30,7 @@ export function ThreatStats({ threatCounts, isMonitoring }: ThreatStatsProps) {
       border: "border-warning/20",
     },
     {
-      label: "Low Risk",
+      label: "Not AI",
       value: threatCounts.low,
       icon: Info,
       color: "text-primary",
@@ -38,7 +38,7 @@ export function ThreatStats({ threatCounts, isMonitoring }: ThreatStatsProps) {
       border: "border-primary/20",
     },
     {
-      label: "Total Detected",
+      label: "Total Analyzed",
       value: total,
       icon: Shield,
       color: "text-foreground",
