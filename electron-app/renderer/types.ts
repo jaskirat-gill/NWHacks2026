@@ -10,6 +10,22 @@ export interface OverlayState {
   showDebugBox: boolean;  // whether to show the debug bounding box
 }
 
+export interface ElectronAPI {
+  onOverlayUpdate: (callback: (state: OverlayState) => void) => void;
+  toggleDetection: () => Promise<{ enabled: boolean }>;
+  getDetectionState: () => Promise<{ enabled: boolean }>;
+  getScreenshots: () => Promise<{ [postId: string]: string[] }>;
+  getScreenshotsDir: () => Promise<string>;
+  onDetectionStateChanged: (callback: (state: { enabled: boolean }) => void) => void;
+  setIgnoreMouseEvents: (ignore: boolean) => void;
+}
+
+declare global {
+  interface Window {
+    electronAPI: ElectronAPI;
+  }
+}
+
 export interface ThreatEntry {
   id: number;
   timestamp: string;
