@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const SCREENSHOTS_DIR = '/home/jgill/repos/NWHacks2026/screenshots';
+// Dynamically resolve screenshots directory relative to this file
+// From electron-app/src/ -> go up to NWHacks2026/ -> screenshots/
+const SCREENSHOTS_DIR = path.resolve(__dirname, '..', '..', 'screenshots');
 // Use 127.0.0.1 explicitly to avoid IPv6 resolution issues on Linux
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
