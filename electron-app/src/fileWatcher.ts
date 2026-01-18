@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const SCREENSHOTS_DIR = '/home/jgill/repos/NWHacks2026/screenshots';
-const API_URL = 'http://localhost:8000/analyze';
+// Use 127.0.0.1 explicitly to avoid IPv6 resolution issues on Linux
+const API_URL = 'http://127.0.0.1:8000/analyze';
 
 // Track processed files to avoid duplicates
 const processedFiles = new Set<string>();
@@ -53,8 +54,14 @@ async function sendImageToAPI(filePath: string): Promise<void> {
 
     const result = await response.json();
     console.log(`[FileWatcher] Successfully sent ${fileName} to API. Response:`, result);
-  } catch (error) {
-    console.error(`[FileWatcher] Error sending ${filePath} to API:`, error);
+  } catch (error: any) {
+    // Check if it's a connection error
+    if (error?.code === 'ECONNREFUSED' || error?.cause?.code === 'ECONNREFUSED') {
+      console.warn(`[FileWatcher] API server not available at ${API_URL}. Is the classifier server running?`);
+      console.warn(`[FileWatcher] To start the API server, run: cd classifier && python main.py`);
+    } else {
+      console.error(`[FileWatcher] Error sending ${filePath} to API:`, error);
+    }
     // Don't throw - continue watching even if API call fails
   }
 }
