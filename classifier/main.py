@@ -3,9 +3,11 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from detector import AIImageDetector
 from models import DetectionResult
+from gemini_analyzer import GeminiAnalyzer
 import logging
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from dotenv import load_dotenv
+import os
 
 # Load environment variables from .env file
 load_dotenv()
@@ -36,8 +38,8 @@ detector = AIImageDetector()
 logger.info("AI Image Detector ready")
 
 # In-memory storage for analysis results
-# Key: analysis_id (string), Value: DetectionResult
-analysis_results: Dict[str, DetectionResult] = {}
+# Key: analysis_id (string), Value: Tuple[DetectionResult, bytes] (result and original image bytes)
+analysis_results: Dict[str, Tuple[DetectionResult, bytes]] = {}
 
 @app.get("/health")
 async def health_check():
@@ -112,8 +114,9 @@ async def analyze_image(
         # Run complete detection pipeline (handles both single and multi-frame)
         detection_result = detector.analyze(image_bytes_list)
         
-        # Store result in memory
-        analysis_results[analysis_id] = detection_result
+        # Store result and original image bytes in memory
+        image_bytes = image_bytes_list[0]  # Store the single image
+        analysis_results[analysis_id] = (detection_result, image_bytes)
         
         logger.info(f"Analysis stored with ID {analysis_id}: {detection_result.severity} severity "
                    f"({'AI' if detection_result.is_ai else 'Human'}, "
@@ -165,11 +168,71 @@ async def get_analysis(analysis_id: str = Path(..., description="Unique identifi
             detail=f"Analysis with ID '{analysis_id}' not found"
         )
     
-    detection_result = analysis_results[analysis_id]
+    detection_result, _ = analysis_results[analysis_id]
     
     logger.info(f"Retrieved analysis with ID {analysis_id}")
     
     return JSONResponse(content=detection_result.to_dict())
+
+
+@app.get("/analyze/{analysis_id}/explain")
+async def get_analysis_with_explanation(analysis_id: str = Path(..., description="Unique identifier for the analysis")):
+    """
+    Retrieve a stored analysis result by ID, with Gemini explanation if the image was classified as AI.
+    
+    This endpoint extends the GET /analyze/{analysis_id} endpoint by also calling Gemini
+    to explain why something was classified as AI (if is_ai is True).
+    
+    Args:
+        analysis_id: Unique identifier for the analysis (path parameter)
+    
+    Returns:
+        JSON response with DetectionResult plus optional Gemini explanation:
+        {
+            ...DetectionResult fields...,
+            "gemini_explanation": str | None  # Only present if is_ai is True
+        }
+    
+    Raises:
+        404: If the analysis_id doesn't exist
+        500: If Gemini explanation fails (but still returns DetectionResult)
+    """
+    if analysis_id not in analysis_results:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Analysis with ID '{analysis_id}' not found"
+        )
+    
+    detection_result, image_bytes = analysis_results[analysis_id]
+    
+    logger.info(f"Retrieved analysis with ID {analysis_id} for explanation")
+    
+    # Build base response with DetectionResult
+    response_dict = detection_result.to_dict()
+    
+    # If the image was classified as AI, get Gemini explanation
+    if detection_result.is_ai:
+        try:
+            # Initialize Gemini analyzer if needed
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                logger.warning("GEMINI_API_KEY not set, skipping Gemini explanation")
+                response_dict["gemini_explanation"] = None
+            else:
+                gemini_analyzer = GeminiAnalyzer(api_key=api_key)
+                explanation = gemini_analyzer.explain_why_ai(image_bytes)
+                response_dict["gemini_explanation"] = explanation
+                logger.info(f"Gemini explanation generated for analysis {analysis_id}")
+        except Exception as e:
+            logger.error(f"Failed to get Gemini explanation: {str(e)}", exc_info=True)
+            # Don't fail the request, just omit the explanation
+            response_dict["gemini_explanation"] = None
+            response_dict["gemini_explanation_error"] = str(e)
+    else:
+        # Not AI, so no explanation needed
+        response_dict["gemini_explanation"] = None
+    
+    return JSONResponse(content=response_dict)
 
 
 if __name__ == "__main__":
