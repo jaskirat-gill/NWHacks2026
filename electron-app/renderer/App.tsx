@@ -7,6 +7,7 @@ declare global {
   interface Window {
     electronAPI: {
       onOverlayUpdate: (callback: (state: OverlayState) => void) => void;
+      setIgnoreMouseEvents: (ignore: boolean) => void;
     };
   }
 }
@@ -45,10 +46,11 @@ const App: React.FC = () => {
         />
       )}
       <Badge
-        x={overlayState.x + overlayState.w - 120}
-        y={overlayState.y + 10}
+        x={overlayState.x + overlayState.w + 12}
+        y={overlayState.y + 60}
         label={overlayState.label}
         score={overlayState.score}
+        postId={overlayState.postId}
       />
     </>
   );
