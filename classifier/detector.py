@@ -52,7 +52,18 @@ class AIImageDetector:
         
         # Initialize multi-frame and Gemini analyzers (optional - only for multi-frame processing)
         self.multi_frame_analyzer = None  # Will be initialized if needed
-        self.gemini_analyzer = None  # Will be initialized if needed
+        
+        # Initialize Gemini analyzer for classification (lazy initialization)
+        self.gemini_analyzer = None
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if gemini_api_key:
+            try:
+                self.gemini_analyzer = GeminiAnalyzer(api_key=gemini_api_key)
+                logger.info("  ✓ Gemini analyzer initialized for classification")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Gemini analyzer: {str(e)}")
+        else:
+            logger.warning("GEMINI_API_KEY not set, Gemini classification will be disabled")
         
         logger.info("AI Image Detector initialized successfully")
     
@@ -124,6 +135,44 @@ class AIImageDetector:
         except Exception as e:
             logger.error(f"Classifier failed: {str(e)}", exc_info=True)
             raise Exception(f"Image classification failed: {str(e)}")
+        
+        # Step 1b: Get Gemini classification (70% weight)
+        gemini_classification = None
+        if self.gemini_analyzer:
+            logger.debug("Getting Gemini classification...")
+            try:
+                gemini_classification = self.gemini_analyzer.classify_image(image_bytes)
+                logger.debug(f"Gemini classification: is_ai={gemini_classification.get('is_ai_likely')}, "
+                           f"confidence={gemini_classification.get('confidence', 0.0):.4f}")
+            except Exception as e:
+                logger.warning(f"Gemini classification failed: {str(e)}, continuing without it")
+                gemini_classification = None
+        
+        # Step 1c: Combine classifier results with 70/30 weighting (70% Gemini, 30% SDXL)
+        if gemini_classification:
+            gemini_weight = 0.7
+            sdxl_weight = 0.3
+            
+            # Combine aesthetic similarity scores
+            gemini_aesthetic = gemini_classification.get("aesthetic_similarity", aesthetic_similarity_score)
+            combined_aesthetic_similarity = (
+                gemini_aesthetic * gemini_weight +
+                aesthetic_similarity_score * sdxl_weight
+            )
+            
+            # Update the aesthetic_similarity_score for downstream processing
+            aesthetic_similarity_score = combined_aesthetic_similarity
+            
+            # Update classifier_result with combined values for severity calculation
+            # We'll also store Gemini's confidence for potential use
+            classifier_result["gemini_classification"] = gemini_classification
+            classifier_result["combined_aesthetic_similarity"] = combined_aesthetic_similarity
+            
+            logger.debug(f"Combined aesthetic similarity (70% Gemini, 30% SDXL): {combined_aesthetic_similarity:.4f}")
+        else:
+            # No Gemini, use SDXL only
+            logger.debug("Using SDXL classification only (Gemini unavailable)")
+            classifier_result["combined_aesthetic_similarity"] = aesthetic_similarity_score
         
         # Step 2: Visual Analysis (improved OCR + semantic errors)
         logger.debug("Running visual analysis...")
@@ -237,6 +286,36 @@ class AIImageDetector:
                 context_loss_result=context_loss_result,
                 signal_confidence=signal_confidence
             )
+            
+            # Apply 70/30 weighting to final confidence and is_ai if Gemini classification is available
+            if gemini_classification:
+                gemini_weight = 0.7
+                sdxl_weight = 0.3
+                
+                # Combine confidence scores
+                gemini_conf = gemini_classification.get("confidence", detection_result.confidence)
+                combined_confidence = (
+                    gemini_conf * gemini_weight +
+                    detection_result.confidence * sdxl_weight
+                )
+                
+                # Weighted vote for is_ai (Gemini's opinion is 70% weight)
+                gemini_is_ai = gemini_classification.get("is_ai_likely", detection_result.is_ai)
+                # If Gemini is very confident (>0.6), use its decision; otherwise weighted vote
+                if gemini_conf > 0.6:
+                    combined_is_ai = gemini_is_ai
+                else:
+                    # Weighted vote: if either classifier strongly agrees, use that
+                    combined_is_ai = gemini_is_ai if gemini_weight > 0.5 else detection_result.is_ai
+                
+                # Update the detection result with combined values
+                detection_result.confidence = round(combined_confidence, 4)
+                detection_result.is_ai = combined_is_ai
+                detection_result.aesthetic_similarity_score = round(aesthetic_similarity_score, 4)
+                
+                logger.debug(f"Combined result (70% Gemini, 30% SDXL): is_ai={combined_is_ai}, "
+                           f"confidence={combined_confidence:.4f}")
+            
             logger.debug(f"Severity: {detection_result.severity}")
         except Exception as e:
             logger.error(f"Severity calculation failed: {str(e)}", exc_info=True)

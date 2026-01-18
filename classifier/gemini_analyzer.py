@@ -75,6 +75,44 @@ class GeminiAnalyzer:
             logger.error(f"Gemini analysis failed: {str(e)}", exc_info=True)
             raise Exception(f"Gemini API call failed: {str(e)}")
     
+    def classify_image(self, image_bytes: bytes) -> Dict[str, Any]:
+        """
+        Lightweight classification: Quick Gemini call to classify a single image as AI or human.
+        
+        Args:
+            image_bytes: Single image bytes to classify
+        
+        Returns:
+            Dictionary with:
+            {
+                "is_ai_likely": bool,
+                "confidence": float (0-1),
+                "aesthetic_similarity": float (0-1)
+            }
+        
+        Raises:
+            Exception: If API call fails
+        """
+        prompt = """Analyze this single TikTok video frame screenshot (no UI elements) and classify whether it appears to be AI-generated.
+
+Return ONLY valid JSON (no markdown, no explanation outside JSON):
+{
+  "is_ai_likely": true/false,
+  "confidence": 0.0-1.0,
+  "aesthetic_similarity": 0.0-1.0
+}
+
+Keep your response brief and focused on classification only."""
+        
+        try:
+            response = self._call_gemini_sync(prompt, [image_bytes])
+            parsed = self._parse_classification_response(response)
+            logger.debug("Gemini classification completed successfully")
+            return parsed
+        except Exception as e:
+            logger.error(f"Gemini classification failed: {str(e)}", exc_info=True)
+            raise Exception(f"Gemini classification failed: {str(e)}")
+    
     def explain_why_ai(self, image_bytes: bytes) -> str:
         """
         Ask Gemini to explain why an image was classified as AI-generated.
@@ -250,6 +288,37 @@ Return ONLY valid JSON (no markdown, no explanation outside JSON):
             result["explanation"] = str(data["explanation"])
         
         return result
+    
+    def _parse_classification_response(self, response_text: str) -> Dict[str, Any]:
+        """
+        Parse lightweight classification response from Gemini.
+        
+        Args:
+            response_text: Raw response from Gemini
+        
+        Returns:
+            Dictionary with is_ai_likely, confidence, and aesthetic_similarity
+        """
+        # Try to extract JSON from response
+        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(0))
+                return {
+                    "is_ai_likely": bool(data.get("is_ai_likely", False)),
+                    "confidence": max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
+                    "aesthetic_similarity": max(0.0, min(1.0, float(data.get("aesthetic_similarity", 0.5))))
+                }
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                logger.warning(f"Failed to parse JSON from Gemini classification: {str(e)}")
+        
+        # Fallback: return default values
+        logger.warning("Using fallback values for Gemini classification")
+        return {
+            "is_ai_likely": False,
+            "confidence": 0.5,
+            "aesthetic_similarity": 0.5
+        }
     
     def _fallback_parse(self, response_text: str) -> Dict[str, Any]:
         """
