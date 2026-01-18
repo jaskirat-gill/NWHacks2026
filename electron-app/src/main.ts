@@ -28,7 +28,7 @@ let frameCounter = 0;
 const DETECTION_THROTTLE_MS = 2000;
 const CACHE_TTL_MS = 5000;
 const SCREENSHOT_INTERVAL_MS = 1000; // Capture every 1 second
-const SCREENSHOT_START_DELAY_MS = 800; // Wait for scroll to settle before capturing
+const SCREENSHOT_START_DELAY_MS = 200; // Minimal delay for scroll settle (was 800ms)
 
 // Create transparent overlay window
 function createOverlayWindow(): void {

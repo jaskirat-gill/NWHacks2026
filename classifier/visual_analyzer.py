@@ -183,9 +183,9 @@ class VisualAnalyzer:
         # Preprocess image for better OCR
         preprocessed = self._preprocess_for_ocr(image)
         
-        # Try multiple PSM (Page Segmentation Mode) modes and combine results
-        # PSM modes for different text layouts in video frames
-        psm_modes = [11, 6, 7, 8, 13]  # Sparse text, uniform block, single line, word, raw line
+        # Use single PSM mode for speed (was 5 modes: [11, 6, 7, 8, 13])
+        # PSM 11: Sparse text - find as much text as possible in any orientation
+        psm_modes = [11]  # Single mode for fast analysis
         all_text_parts = []
         all_locations = []
         all_confidences = []

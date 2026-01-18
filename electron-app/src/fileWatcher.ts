@@ -15,7 +15,7 @@ const sentPostIds = new Set<string>();
 
 // Debounce timeout for file events
 let debounceTimer: NodeJS.Timeout | null = null;
-const DEBOUNCE_MS = 500; // Wait 500ms after last file event before processing
+const DEBOUNCE_MS = 100; // Just enough to catch duplicate events (was 500ms)
 
 // Batch queue: group files by postId, accumulate up to BATCH_SIZE files per post
 interface QueuedFile {
@@ -65,7 +65,7 @@ function extractPostId(fileName: string): string {
 }
 
 /**
- * Send batch of image files (10 files) to the analyze API endpoint
+ * Send batch of image files to the analyze API endpoint
  */
 async function sendImageBatchToAPI(filePaths: string[], postId: string): Promise<void> {
   try {
