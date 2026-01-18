@@ -3,7 +3,7 @@ import * as path from 'path';
 
 const SCREENSHOTS_DIR = '/home/jgill/repos/NWHacks2026/screenshots';
 // Use 127.0.0.1 explicitly to avoid IPv6 resolution issues on Linux
-const API_URL = 'http://127.0.0.1:8000/analyze';
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
 // Track processed files to avoid duplicates
 const processedFiles = new Set<string>();
@@ -16,13 +16,24 @@ const DEBOUNCE_MS = 500; // Wait 500ms after last file event before processing
 let watcher: fs.FSWatcher | null = null;
 
 /**
+ * Extract post ID from filename (filename minus extension)
+ */
+function extractPostId(fileName: string): string {
+  // Remove .jpg or .jpeg extension (case insensitive)
+  return fileName.replace(/\.(jpg|jpeg)$/i, '');
+}
+
+/**
  * Send image file to the analyze API endpoint
  */
-async function sendImageToAPI(filePath: string): Promise<void> {
+async function sendImageToAPI(filePath: string, postId: string): Promise<void> {
   try {
     // Read the file
     const fileBuffer = await fs.promises.readFile(filePath);
     const fileName = path.basename(filePath);
+
+    // Build API URL with post ID
+    const apiUrl = `${API_BASE_URL}/analyze/${postId}`;
 
     // Create FormData-like payload using manual multipart/form-data construction
     const boundary = `----WebKitFormBoundary${Date.now()}`;
@@ -39,7 +50,7 @@ async function sendImageToAPI(filePath: string): Promise<void> {
 
     // Send POST request
     // Note: Content-Type header includes boundary as required for multipart/form-data
-    const response = await fetch(API_URL, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
@@ -53,11 +64,11 @@ async function sendImageToAPI(filePath: string): Promise<void> {
     }
 
     const result = await response.json();
-    console.log(`[FileWatcher] Successfully sent ${fileName} to API. Response:`, result);
+    console.log(`[FileWatcher] Successfully sent ${fileName} to API with post ID ${postId}. Response:`, result);
   } catch (error: any) {
     // Check if it's a connection error
     if (error?.code === 'ECONNREFUSED' || error?.cause?.code === 'ECONNREFUSED') {
-      console.warn(`[FileWatcher] API server not available at ${API_URL}. Is the classifier server running?`);
+      console.warn(`[FileWatcher] API server not available at ${API_BASE_URL}. Is the classifier server running?`);
       console.warn(`[FileWatcher] To start the API server, run: cd classifier && python main.py`);
     } else {
       console.error(`[FileWatcher] Error sending ${filePath} to API:`, error);
@@ -96,9 +107,12 @@ async function processNewFile(fileName: string): Promise<void> {
   // Mark as processed
   processedFiles.add(fileName);
 
+  // Extract post ID from filename (filename minus extension)
+  const postId = extractPostId(fileName);
+
   // Send to API
-  console.log(`[FileWatcher] Processing new file: ${fileName}`);
-  await sendImageToAPI(filePath);
+  console.log(`[FileWatcher] Processing new file: ${fileName} with post ID: ${postId}`);
+  await sendImageToAPI(filePath, postId);
 }
 
 /**

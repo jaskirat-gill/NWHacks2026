@@ -1,13 +1,10 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Path
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from detector import AIImageDetector
-from lesson_generator import LessonGenerator
 from models import DetectionResult
-import os
-import uuid
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -38,42 +35,41 @@ logger.info("Initializing AI Image Detector...")
 detector = AIImageDetector()
 logger.info("AI Image Detector ready")
 
+# In-memory storage for analysis results
+# Key: analysis_id (string), Value: DetectionResult
+analysis_results: Dict[str, DetectionResult] = {}
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
         "status": "ok",
         "model": "Organika/sdxl-detector",
-        "lesson_generator_available": lesson_generator is not None
+        "stored_analyses": len(analysis_results)
     }
 
 
-@app.post("/analyze")
+@app.post("/analyze/{analysis_id}")
 async def analyze_image(
-    file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks()
+    analysis_id: str = Path(..., description="Unique identifier for this analysis"),
+    file: UploadFile = File(...)
 ):
     """
-    Analyze an uploaded image with complete detection pipeline (fast path).
+    Analyze an uploaded image and store the result in memory.
     
-    This endpoint immediately returns detection results and triggers
-    background lesson generation. Use /analyze/{job_id}/lesson to get the lesson.
+    The analysis is stored with the provided ID and can be retrieved later
+    using GET /analyze/{analysis_id}.
     
     Args:
+        analysis_id: Unique identifier for this analysis (path parameter)
         file: Image file (multipart/form-data)
     
     Returns:
-        JSON response with DetectionResult and job_id:
+        JSON response indicating success:
         {
-            "detection": {
-                "is_ai": bool,
-                "confidence": float,
-                "severity": "LOW" | "MEDIUM" | "HIGH",
-                "reasons": List[str],
-                "risk_factors": Dict,
-                "classifier_scores": Dict
-            },
-            "job_id": str
+            "status": "success",
+            "analysis_id": str,
+            "message": "Analysis stored successfully"
         }
     """
     # Validate content type
@@ -83,6 +79,10 @@ async def analyze_image(
             detail=f"Invalid file type: {file.content_type}. Expected an image file."
         )
     
+    # Check if analysis_id already exists
+    if analysis_id in analysis_results:
+        logger.warning(f"Analysis ID {analysis_id} already exists, overwriting...")
+    
     try:
         # Read image bytes
         image_bytes = await file.read()
@@ -90,23 +90,21 @@ async def analyze_image(
         if len(image_bytes) == 0:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
         
-        # Run complete detection pipeline (fast path)
+        # Run complete detection pipeline
         detection_result = detector.analyze(image_bytes)
         
-        # Generate job ID for lesson generation
-        job_id = str(uuid.uuid4())
+        # Store result in memory
+        analysis_results[analysis_id] = detection_result
         
-        # Return detection result immediately
-        response = {
-            "detection": detection_result.to_dict(),
-            "job_id": job_id
-        }
-        
-        logger.info(f"Detection complete: {detection_result.severity} severity "
+        logger.info(f"Analysis stored with ID {analysis_id}: {detection_result.severity} severity "
                    f"({'AI' if detection_result.is_ai else 'Human'}, "
                    f"{detection_result.confidence:.0%} confidence)")
         
-        return JSONResponse(content=response)
+        return JSONResponse(content={
+            "status": "success",
+            "analysis_id": analysis_id,
+            "message": "Analysis stored successfully"
+        })
         
     except Exception as e:
         logger.error(f"Error processing image: {str(e)}", exc_info=True)
@@ -118,6 +116,41 @@ async def analyze_image(
             status_code=500,
             detail=f"Error processing image: {str(e)}"
         )
+
+
+@app.get("/analyze/{analysis_id}")
+async def get_analysis(analysis_id: str = Path(..., description="Unique identifier for the analysis")):
+    """
+    Retrieve a stored analysis result by ID.
+    
+    Args:
+        analysis_id: Unique identifier for the analysis (path parameter)
+    
+    Returns:
+        JSON response with DetectionResult:
+        {
+            "is_ai": bool,
+            "confidence": float,
+            "severity": "LOW" | "MEDIUM" | "HIGH",
+            "reasons": List[str],
+            "risk_factors": Dict,
+            "classifier_scores": Dict
+        }
+    
+    Raises:
+        404: If the analysis_id doesn't exist
+    """
+    if analysis_id not in analysis_results:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Analysis with ID '{analysis_id}' not found"
+        )
+    
+    detection_result = analysis_results[analysis_id]
+    
+    logger.info(f"Retrieved analysis with ID {analysis_id}")
+    
+    return JSONResponse(content=detection_result.to_dict())
 
 
 if __name__ == "__main__":
