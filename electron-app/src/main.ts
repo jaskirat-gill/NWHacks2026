@@ -120,7 +120,20 @@ function disconnectApiWebSocket(): void {
   if (apiWebSocket) {
     console.log(`[WebSocket] Disconnecting from FastAPI WebSocket for ${currentApiPostId}`);
     apiWebSocket.removeAllListeners();
-    apiWebSocket.close();
+    
+    // Only close if the WebSocket is OPEN or CONNECTING
+    // CLOSING (2) or CLOSED (3) states don't need to be closed
+    // Wrap in try-catch to handle edge cases where close() might fail
+    try {
+      const readyState = apiWebSocket.readyState;
+      if (readyState === WebSocket.OPEN || readyState === WebSocket.CONNECTING) {
+        apiWebSocket.close();
+      }
+    } catch (err) {
+      // Ignore errors when closing - the WebSocket is being cleaned up anyway
+      console.log(`[WebSocket] Error closing connection (this is usually safe to ignore):`, err);
+    }
+    
     apiWebSocket = null;
     currentApiPostId = null;
   }
