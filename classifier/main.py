@@ -9,7 +9,7 @@ import logging
 import os
 import glob
 import base64
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 import os
 
@@ -234,7 +234,7 @@ async def get_education(analysis_id: str = Path(..., description="Unique identif
             detail=f"Analysis with ID '{analysis_id}' not found"
         )
     
-    detection_result = analysis_results[analysis_id]
+    detection_result, _ = analysis_results[analysis_id]
     
     try:
         # Find frames for this post in screenshots directory

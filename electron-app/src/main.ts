@@ -1,5 +1,4 @@
 import { app, BrowserWindow, screen, globalShortcut, ipcMain } from 'electron';
-import { app, BrowserWindow, screen, globalShortcut, ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
